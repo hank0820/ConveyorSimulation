@@ -1,9 +1,8 @@
 import type { FC } from 'react'
+import type { SimulationStateWithProgress } from '../simulation/types'
 
 interface Props {
-  timeSec: number
-  trayPositionFt: number
-  lengthFt: number
+  state: SimulationStateWithProgress
   playing: boolean
   playbackSpeed: number
   setPlaybackSpeed: (s: number) => void
@@ -13,9 +12,7 @@ interface Props {
 }
 
 const SimulationControls: FC<Props> = ({
-  timeSec,
-  trayPositionFt,
-  lengthFt,
+  state,
   playing,
   playbackSpeed,
   setPlaybackSpeed,
@@ -23,11 +20,35 @@ const SimulationControls: FC<Props> = ({
   onStep,
   onReset,
 }) => {
+  const { tray, totalRouteDistance, distanceCompleted } = state
+
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
       <h1>Conveyor Simulation</h1>
-      <div>Simulation Time: {timeSec.toFixed(1)} sec</div>
-      <div>Tray Position: {trayPositionFt.toFixed(1)} / {lengthFt} ft</div>
+      <div>Simulation Time: {state.timeSec.toFixed(1)} sec</div>
+
+      <div style={{ marginTop: 8 }}>
+        <strong>Tray ID:</strong> {tray.id}
+      </div>
+      <div>
+        <strong>Current Segment:</strong> {tray.currentSegmentId}
+      </div>
+      <div>
+        <strong>Position:</strong> {tray.positionFt.toFixed(1)} / {state.segments.find(s => s.id === tray.currentSegmentId)?.lengthFt} ft
+      </div>
+      <div>
+        <strong>Tray Status:</strong> {tray.status}
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <strong>Total Route Distance:</strong> {totalRouteDistance} ft
+      </div>
+      <div>
+        <strong>Distance Completed:</strong> {distanceCompleted.toFixed(1)} ft
+      </div>
+      <div>
+        <strong>Route Progress:</strong> {state.routeProgress.toFixed(1)} %
+      </div>
 
       <div style={{ marginTop: 8 }}>
         <button onClick={onPlayPause}>{playing ? 'Pause' : 'Play'}</button>

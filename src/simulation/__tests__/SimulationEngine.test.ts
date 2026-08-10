@@ -1,51 +1,102 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import SimulationEngine from '../SimulationEngine'
 
-const CONVEYOR_CONFIG = { id: 'TEST_CONVEYOR', lengthFt: 120, speedFtPerMin: 120 }
+const SEGMENTS = [
+  { id: 'A1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'A1T' },
+  { id: 'A1T', lengthFt: 59, speedFtPerMin: 120, nextSegmentId: 'T' },
+  { id: 'T', lengthFt: 33, speedFtPerMin: 120, nextSegmentId: 'D' },
+  { id: 'D', lengthFt: 235, speedFtPerMin: 120 },
+]
 
-describe('SimulationEngine', () => {
+describe('SimulationEngine multi-segment', () => {
   let engine: SimulationEngine
 
   beforeEach(() => {
-    engine = new SimulationEngine(CONVEYOR_CONFIG)
+    engine = new SimulationEngine(SEGMENTS)
   })
 
-  it('initial tray position is 0 and time is 0', () => {
+  it('initial state is on A1 at position 0', () => {
     const s = engine.getState()
-    expect(s.timeSec).toBe(0)
-    expect(s.tray.positionFt).toBe(0)
+    expect(s.tray.currentSegmentId).toBe('A1')
+    expect(s.tray.positionFt).toBeCloseTo(0)
   })
 
-  it('after 1 second position is 2 ft', () => {
-    engine.step(1)
+  it('at 40s still on A1 near 80 ft', () => {
+    engine.step(40)
     const s = engine.getState()
-    expect(s.timeSec).toBe(1)
-    expect(s.tray.positionFt).toBeCloseTo(2)
+    expect(s.tray.currentSegmentId).toBe('A1')
+    expect(s.tray.positionFt).toBeCloseTo(80, 6)
   })
 
-  it('after 10 seconds position is 20 ft', () => {
-    engine.step(10)
+  it('at 40.5s transitions to A1T', () => {
+    engine.step(40.5)
     const s = engine.getState()
-    expect(s.tray.positionFt).toBeCloseTo(20)
+    expect(s.tray.currentSegmentId).toBe('A1T')
+    expect(s.tray.positionFt).toBeCloseTo(0, 6)
   })
 
-  it('after 60 seconds position is 120 ft', () => {
-    engine.step(60)
+  it('at 41s is ~1 ft into A1T', () => {
+    engine.step(41)
     const s = engine.getState()
-    expect(s.tray.positionFt).toBeCloseTo(120)
+    expect(s.tray.currentSegmentId).toBe('A1T')
+    expect(s.tray.positionFt).toBeCloseTo(1, 6)
   })
 
-  it('stepping beyond 60 seconds does not exceed conveyor length', () => {
-    engine.step(1000)
+  it('at 70s reaches T', () => {
+    engine.step(70)
     const s = engine.getState()
-    expect(s.tray.positionFt).toBeCloseTo(120)
+    expect(s.tray.currentSegmentId).toBe('T')
+    expect(s.tray.positionFt).toBeCloseTo(0, 6)
   })
 
-  it('reset returns time and position to zero', () => {
-    engine.step(5)
-    engine.reset()
+  it('at 86.5s reaches D', () => {
+    engine.step(86.5)
     const s = engine.getState()
-    expect(s.timeSec).toBe(0)
-    expect(s.tray.positionFt).toBe(0)
+    expect(s.tray.currentSegmentId).toBe('D')
+    expect(s.tray.positionFt).toBeCloseTo(0, 6)
   })
+
+  it('at 100s is on D at ~27 ft', () => {
+    engine.step(100)
+    const s = engine.getState()
+    expect(s.tray.currentSegmentId).toBe('D')
+    expect(s.tray.positionFt).toBeCloseTo(27, 6)
+  })
+
+  it('at 204s completes at end of D', () => {
+    engine.step(204)
+    const s = engine.getState()
+    expect(s.tray.currentSegmentId).toBe('D')
+    expect(s.tray.positionFt).toBeCloseTo(235, 6)
+    expect(s.tray.status).toBe('COMPLETE')
+  })
+
+  it('at 300s remains complete at end of D', () => {
+    engine.step(300)
+    const s = engine.getState()
+    expect(s.tray.currentSegmentId).toBe('D')
+    expect(s.tray.positionFt).toBeCloseTo(235, 6)
+    expect(s.tray.status).toBe('COMPLETE')
+  })
+
+  it('total route time is ~204 sec', () => {
+    engine.step(204)
+    const s = engine.getState()
+    expect(s.timeSec).toBeCloseTo(204, 6)
+  })
+
+  it('engine.step(10) equals 100 * engine.step(0.1)', () => {
+    const e1 = new SimulationEngine(SEGMENTS)
+    e1.step(10)
+    const s1 = e1.getState()
+
+    const e2 = new SimulationEngine(SEGMENTS)
+    for (let i = 0; i < 100; i++) e2.step(0.1)
+    const s2 = e2.getState()
+
+    expect(s1.tray.positionFt).toBeCloseTo(s2.tray.positionFt, 6)
+    expect(s1.tray.currentSegmentId).toBe(s2.tray.currentSegmentId)
+    expect(s1.timeSec).toBeCloseTo(s2.timeSec, 6)
+  })
+
 })

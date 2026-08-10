@@ -3,26 +3,33 @@ import './App.css'
 import SimulationControls from './components/SimulationControls'
 import ConveyorDiagram from './visualization/ConveyorDiagram'
 import SimulationEngine from './simulation/SimulationEngine'
+import type { SimulationStateWithProgress } from './simulation/types'
 
-const CONVEYOR_CONFIG = {
-  id: 'TEST_CONVEYOR',
-  lengthFt: 120,
-  speedFtPerMin: 120,
-}
+const SEGMENTS = [
+  { id: 'A1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'A1T' },
+  { id: 'A1T', lengthFt: 59, speedFtPerMin: 120, nextSegmentId: 'T' },
+  { id: 'T', lengthFt: 33, speedFtPerMin: 120, nextSegmentId: 'D' },
+  { id: 'D', lengthFt: 235, speedFtPerMin: 120 },
+]
 
 function App() {
   const engineRef = useRef<SimulationEngine | null>(null)
-  const [state, setState] = useState(() => {
-    // initial minimal state
-    return { timeSec: 0, trayPositionFt: 0 }
-  })
+  const [state, setState] = useState<SimulationStateWithProgress>(() => ({
+    timeSec: 0,
+    tray: { id: 1, currentSegmentId: SEGMENTS[0].id, positionFt: 0, status: 'MOVING' },
+    segments: SEGMENTS,
+    totalRouteDistance: SEGMENTS.reduce((a, s) => a + s.lengthFt, 0),
+    distanceCompleted: 0,
+    routeProgress: 0,
+  }))
   const [playing, setPlaying] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
 
   // create engine once
   useEffect(() => {
-    engineRef.current = new SimulationEngine(CONVEYOR_CONFIG)
-    setState({ timeSec: 0, trayPositionFt: 0 })
+    engineRef.current = new SimulationEngine(SEGMENTS)
+    const s = engineRef.current.getState()
+    setState(s)
   }, [])
 
   // animation loop
@@ -39,7 +46,7 @@ function App() {
         const simAdvance = (dtMs / 1000) * playbackSpeed
         engine.step(simAdvance)
         const s = engine.getState()
-        setState({ timeSec: s.timeSec, trayPositionFt: s.tray.positionFt })
+        setState(s)
       }
       raf = requestAnimationFrame(tick)
     }
@@ -57,7 +64,7 @@ function App() {
     if (!engine) return
     engine.step(1)
     const s = engine.getState()
-    setState({ timeSec: s.timeSec, trayPositionFt: s.tray.positionFt })
+    setState(s)
   }
 
   function handleReset() {
@@ -65,16 +72,14 @@ function App() {
     if (!engine) return
     engine.reset()
     const s = engine.getState()
-    setState({ timeSec: s.timeSec, trayPositionFt: s.tray.positionFt })
+    setState(s)
     setPlaying(false)
   }
 
   return (
     <div style={{ padding: 16 }}>
       <SimulationControls
-        timeSec={state.timeSec}
-        trayPositionFt={state.trayPositionFt}
-        lengthFt={CONVEYOR_CONFIG.lengthFt}
+        state={state}
         playing={playing}
         playbackSpeed={playbackSpeed}
         setPlaybackSpeed={setPlaybackSpeed}
@@ -84,7 +89,7 @@ function App() {
       />
 
       <div style={{ marginTop: 16 }}>
-        <ConveyorDiagram lengthFt={CONVEYOR_CONFIG.lengthFt} trayPositionFt={state.trayPositionFt} />
+        <ConveyorDiagram segments={state.segments} traySegmentId={state.tray.currentSegmentId} trayPositionFt={state.tray.positionFt} />
       </div>
     </div>
   )
