@@ -39,6 +39,16 @@ export interface SourceState {
   firstSegmentId: string
 }
 
+export type MissionState = 'RETRIEVING' | 'READY_AT_EXCHANGER' | 'RELEASED'
+
+export interface Mission {
+  missionId: number
+  assignedExchanger: SourceId
+  createdAtSec: number
+  readyAtSec: number
+  state: MissionState
+}
+
 export interface MergeState {
   nextPriority: SourceId
   eligibleA: boolean
@@ -64,6 +74,35 @@ export interface SimulationState {
   source: SourceState
   sources: SourceState[]
   mergeState: MergeState
+  // Milestone 5 diagnostics / control
+  korber: {
+    lastConsumptionTime: number | null
+    totalConsumed: number
+    ready: boolean
+    starved: boolean
+  }
+  missions: Mission[]
+  pendingA: number
+  pendingB: number
+  pendingC: number
+  retrievingA: number
+  retrievingB: number
+  retrievingC: number
+  readyA: number
+  readyB: number
+  readyC: number
+  additionalASRSDemand: number
+  globalTargetCount: number
+  globalCurrentCount: number
+  transportInventory: number
+  physicalPreKorberInventory: number
+  purgeDemandA: number
+  purgeDemandB: number
+  purgeDemandC: number
+  asrsNextAssign: SourceId
+  asrsAssignedA: number
+  asrsAssignedB: number
+  asrsAssignedC: number
   segmentStats: SegmentStats[]
   movingCount: number
   blockedCount: number

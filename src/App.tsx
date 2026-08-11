@@ -16,43 +16,12 @@ const SEGMENTS = [
 ]
 
 function App() {
-  const engineRef = useRef<SimulationEngine | null>(null)
-  const [state, setState] = useState<SimulationStateWithProgress>(() => ({
-    timeSec: 0,
-    trays: [],
-    segments: SEGMENTS,
-    source: { id: 'A', enabled: true, sourceReady: false, sourceBlocked: false, lastSourceReleaseTime: -8, nextReleaseTime: 0, totalTraysCreated: 0, headwaySec: 8, initialOffsetSec: 0, firstSegmentId: 'A1' },
-    sources: [
-      { id: 'A', enabled: true, sourceReady: false, sourceBlocked: false, lastSourceReleaseTime: -8, nextReleaseTime: 0, totalTraysCreated: 0, headwaySec: 8, initialOffsetSec: 0, firstSegmentId: 'A1' },
-      { id: 'B', enabled: true, sourceReady: false, sourceBlocked: false, lastSourceReleaseTime: -6, nextReleaseTime: 2, totalTraysCreated: 0, headwaySec: 8, initialOffsetSec: 2, firstSegmentId: 'B1' },
-      { id: 'C', enabled: true, sourceReady: false, sourceBlocked: false, lastSourceReleaseTime: -4, nextReleaseTime: 4, totalTraysCreated: 0, headwaySec: 8, initialOffsetSec: 4, firstSegmentId: 'C1' },
-    ],
-    mergeState: {
-      nextPriority: 'A',
-      eligibleA: false,
-      eligibleB: false,
-      eligibleC: false,
-      selectedSource: 'NONE',
-      cumulativeTransfersA: 0,
-      cumulativeTransfersB: 0,
-      cumulativeTransfersC: 0,
-    },
-    segmentStats: [],
-    movingCount: 0,
-    blockedCount: 0,
-    totalTraysCreated: 0,
-    materialBalanceError: 0,
-    totalRouteDistance: SEGMENTS.reduce((a, s) => a + s.lengthFt, 0),
-  }))
+  const engineRef = useRef<SimulationEngine>(new SimulationEngine(SEGMENTS))
+  const [state, setState] = useState<SimulationStateWithProgress>(() => engineRef.current.getState())
   const [playing, setPlaying] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
 
-  // create engine once
-  useEffect(() => {
-    engineRef.current = new SimulationEngine(SEGMENTS)
-    const s = engineRef.current.getState()
-    setState(s)
-  }, [])
+  // animation loop
 
   // animation loop
   useEffect(() => {
@@ -111,7 +80,7 @@ function App() {
       />
 
       <div style={{ marginTop: 16 }}>
-        <ConveyorDiagram segments={state.segments} trays={state.trays} />
+        <ConveyorDiagram segments={state.segments} trays={state.trays} state={state} />
       </div>
     </div>
   )
