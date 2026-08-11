@@ -16,11 +16,15 @@ function App() {
   const engineRef = useRef<SimulationEngine | null>(null)
   const [state, setState] = useState<SimulationStateWithProgress>(() => ({
     timeSec: 0,
-    tray: { id: 1, currentSegmentId: SEGMENTS[0].id, positionFt: 0, status: 'MOVING' },
+    trays: [],
     segments: SEGMENTS,
+    source: { enabled: true, sourceReady: true, sourceBlocked: false, lastSourceReleaseTime: -8, totalTraysCreated: 0, headwaySec: 8 },
+    segmentStats: [],
+    movingCount: 0,
+    blockedCount: 0,
+    totalTraysCreated: 0,
+    materialBalanceError: 0,
     totalRouteDistance: SEGMENTS.reduce((a, s) => a + s.lengthFt, 0),
-    distanceCompleted: 0,
-    routeProgress: 0,
   }))
   const [playing, setPlaying] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
@@ -89,7 +93,7 @@ function App() {
       />
 
       <div style={{ marginTop: 16 }}>
-        <ConveyorDiagram segments={state.segments} traySegmentId={state.tray.currentSegmentId} trayPositionFt={state.tray.positionFt} />
+        <ConveyorDiagram segments={state.segments} trays={state.trays} />
       </div>
     </div>
   )

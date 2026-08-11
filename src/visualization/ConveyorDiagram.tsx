@@ -3,11 +3,10 @@ import type { ConveyorSegmentConfig } from '../simulation/types'
 
 interface Props {
   segments: ConveyorSegmentConfig[]
-  traySegmentId: string
-  trayPositionFt: number
+  trays: import('../simulation/types').Tray[]
 }
 
-const ConveyorDiagram: FC<Props> = ({ segments, traySegmentId, trayPositionFt }) => {
+const ConveyorDiagram: FC<Props> = ({ segments, trays }) => {
   const width = 900
   const height = 120
   const padding = 20
@@ -23,9 +22,14 @@ const ConveyorDiagram: FC<Props> = ({ segments, traySegmentId, trayPositionFt })
     return rect
   })
 
-  // find tray rect
-  const active = segRects.find((r) => r.id === traySegmentId)
-  const cx = active ? active.x + (Math.max(0, Math.min(1, trayPositionFt / active.lengthFt)) * active.w) : padding
+
+  // compute cx for each tray
+  const trayPositions = trays.map(t => {
+    const rect = segRects.find(r => r.id === t.currentSegmentId)!
+    const pct = Math.max(0, Math.min(1, t.positionFt / rect.lengthFt))
+    const cx = rect.x + pct * rect.w
+    return { id: t.id, cx, cy: height / 2, segId: t.currentSegmentId }
+  })
 
   return (
     <svg width={width} height={height} role="img" aria-label="Conveyor network">
@@ -37,7 +41,12 @@ const ConveyorDiagram: FC<Props> = ({ segments, traySegmentId, trayPositionFt })
         </g>
       ))}
 
-      <circle cx={cx} cy={height / 2} r={8} fill="#1976d2" />
+      {trayPositions.map(tp => (
+        <g key={tp.id}>
+          <circle cx={tp.cx} cy={tp.cy} r={8} fill="#1976d2" />
+          <text x={tp.cx} y={tp.cy + 20} fontSize={10} fill="#000" textAnchor="middle">{tp.id}</text>
+        </g>
+      ))}
     </svg>
   )
 }

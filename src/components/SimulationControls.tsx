@@ -20,7 +20,7 @@ const SimulationControls: FC<Props> = ({
   onStep,
   onReset,
 }) => {
-  const { tray, totalRouteDistance, distanceCompleted } = state
+  const { trays, segmentStats, source, movingCount, blockedCount, totalTraysCreated, materialBalanceError } = state
 
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
@@ -28,26 +28,30 @@ const SimulationControls: FC<Props> = ({
       <div>Simulation Time: {state.timeSec.toFixed(1)} sec</div>
 
       <div style={{ marginTop: 8 }}>
-        <strong>Tray ID:</strong> {tray.id}
+        <strong>Total Physical Trays:</strong> {trays.length}
       </div>
       <div>
-        <strong>Current Segment:</strong> {tray.currentSegmentId}
+        <strong>Total Trays Created:</strong> {totalTraysCreated}
       </div>
       <div>
-        <strong>Position:</strong> {tray.positionFt.toFixed(1)} / {state.segments.find(s => s.id === tray.currentSegmentId)?.lengthFt} ft
-      </div>
-      <div>
-        <strong>Tray Status:</strong> {tray.status}
+        <strong>Material Balance Error:</strong> {materialBalanceError}
       </div>
 
       <div style={{ marginTop: 8 }}>
-        <strong>Total Route Distance:</strong> {totalRouteDistance} ft
+        <strong>Source:</strong> {source.sourceReady ? 'READY' : source.sourceBlocked ? 'BLOCKED' : 'WAITING'}
       </div>
-      <div>
-        <strong>Distance Completed:</strong> {distanceCompleted.toFixed(1)} ft
+
+      <div style={{ marginTop: 8 }}>
+        <strong>Segment Occupancy:</strong>
+        <ul>
+          {segmentStats.map(s => (
+            <li key={s.id}>{s.id}: {s.occupancy}{s.capacity ? ` / ${s.capacity}` : ''}</li>
+          ))}
+        </ul>
       </div>
+
       <div>
-        <strong>Route Progress:</strong> {state.routeProgress.toFixed(1)} %
+        <strong>Moving Trays:</strong> {movingCount} &nbsp; <strong>Blocked Trays:</strong> {blockedCount}
       </div>
 
       <div style={{ marginTop: 8 }}>

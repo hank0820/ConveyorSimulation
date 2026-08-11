@@ -17,66 +17,75 @@ describe('SimulationEngine multi-segment', () => {
 
   it('initial state is on A1 at position 0', () => {
     const s = engine.getState()
-    expect(s.tray.currentSegmentId).toBe('A1')
-    expect(s.tray.positionFt).toBeCloseTo(0)
+    const first = s.trays[0]
+    expect(first.currentSegmentId).toBe('A1')
+    expect(first.positionFt).toBeCloseTo(0)
   })
 
   it('at 40s still on A1 near 80 ft', () => {
     engine.step(40)
     const s = engine.getState()
-    expect(s.tray.currentSegmentId).toBe('A1')
-    expect(s.tray.positionFt).toBeCloseTo(80, 6)
+    const first = s.trays[0]
+    expect(first.currentSegmentId).toBe('A1')
+    expect(first.positionFt).toBeCloseTo(80, 6)
   })
 
   it('at 40.5s transitions to A1T', () => {
     engine.step(40.5)
     const s = engine.getState()
-    expect(s.tray.currentSegmentId).toBe('A1T')
-    expect(s.tray.positionFt).toBeCloseTo(0, 6)
+    const first = s.trays[0]
+    expect(first.currentSegmentId).toBe('A1T')
+    expect(first.positionFt).toBeCloseTo(0, 6)
   })
 
   it('at 41s is ~1 ft into A1T', () => {
     engine.step(41)
     const s = engine.getState()
-    expect(s.tray.currentSegmentId).toBe('A1T')
-    expect(s.tray.positionFt).toBeCloseTo(1, 6)
+    const first = s.trays[0]
+    expect(first.currentSegmentId).toBe('A1T')
+    expect(first.positionFt).toBeCloseTo(1, 6)
   })
 
   it('at 70s reaches T', () => {
     engine.step(70)
     const s = engine.getState()
-    expect(s.tray.currentSegmentId).toBe('T')
-    expect(s.tray.positionFt).toBeCloseTo(0, 6)
+    const first = s.trays[0]
+    expect(first.currentSegmentId).toBe('T')
+    expect(first.positionFt).toBeCloseTo(0, 6)
   })
 
   it('at 86.5s reaches D', () => {
     engine.step(86.5)
     const s = engine.getState()
-    expect(s.tray.currentSegmentId).toBe('D')
-    expect(s.tray.positionFt).toBeCloseTo(0, 6)
+    const first = s.trays[0]
+    expect(first.currentSegmentId).toBe('D')
+    expect(first.positionFt).toBeCloseTo(0, 6)
   })
 
   it('at 100s is on D at ~27 ft', () => {
     engine.step(100)
     const s = engine.getState()
-    expect(s.tray.currentSegmentId).toBe('D')
-    expect(s.tray.positionFt).toBeCloseTo(27, 6)
+    const first = s.trays[0]
+    expect(first.currentSegmentId).toBe('D')
+    expect(first.positionFt).toBeCloseTo(27, 6)
   })
 
   it('at 204s completes at end of D', () => {
     engine.step(204)
     const s = engine.getState()
-    expect(s.tray.currentSegmentId).toBe('D')
-    expect(s.tray.positionFt).toBeCloseTo(235, 6)
-    expect(s.tray.status).toBe('COMPLETE')
+    const first = s.trays[0]
+    expect(first.currentSegmentId).toBe('D')
+    expect(first.positionFt).toBeCloseTo(235, 6)
+    expect(first.status).toBe('BLOCKED')
   })
 
   it('at 300s remains complete at end of D', () => {
     engine.step(300)
     const s = engine.getState()
-    expect(s.tray.currentSegmentId).toBe('D')
-    expect(s.tray.positionFt).toBeCloseTo(235, 6)
-    expect(s.tray.status).toBe('COMPLETE')
+    const first = s.trays[0]
+    expect(first.currentSegmentId).toBe('D')
+    expect(first.positionFt).toBeCloseTo(235, 6)
+    expect(first.status).toBe('BLOCKED')
   })
 
   it('total route time is ~204 sec', () => {
@@ -94,8 +103,10 @@ describe('SimulationEngine multi-segment', () => {
     for (let i = 0; i < 100; i++) e2.step(0.1)
     const s2 = e2.getState()
 
-    expect(s1.tray.positionFt).toBeCloseTo(s2.tray.positionFt, 6)
-    expect(s1.tray.currentSegmentId).toBe(s2.tray.currentSegmentId)
+    const t1 = s1.trays[0]
+    const t2 = s2.trays[0]
+    expect(t1.positionFt).toBeCloseTo(t2.positionFt, 6)
+    expect(t1.currentSegmentId).toBe(t2.currentSegmentId)
     expect(s1.timeSec).toBeCloseTo(s2.timeSec, 6)
   })
 
