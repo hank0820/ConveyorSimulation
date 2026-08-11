@@ -20,7 +20,7 @@ const SimulationControls: FC<Props> = ({
   onStep,
   onReset,
 }) => {
-  const { trays, segmentStats, source, movingCount, blockedCount, totalTraysCreated, materialBalanceError } = state
+  const { trays, segmentStats, sources, mergeState, movingCount, blockedCount, totalTraysCreated, materialBalanceError } = state
 
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
@@ -38,7 +38,31 @@ const SimulationControls: FC<Props> = ({
       </div>
 
       <div style={{ marginTop: 8 }}>
-        <strong>Source:</strong> {source.sourceReady ? 'READY' : source.sourceBlocked ? 'BLOCKED' : 'WAITING'}
+        <strong>Sources:</strong>
+        <ul>
+          {sources.map((source) => (
+            <li key={source.id}>
+              Source {source.id}: {source.sourceReady ? 'READY' : source.sourceBlocked ? 'BLOCKED' : 'WAITING'}
+              {' '}({source.totalTraysCreated} created)
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <strong>Merge Next Priority:</strong> {mergeState.nextPriority}
+      </div>
+
+      <div>
+        <strong>Merge Eligible:</strong> A: {mergeState.eligibleA ? 'yes' : 'no'}, B: {mergeState.eligibleB ? 'yes' : 'no'}, C: {mergeState.eligibleC ? 'yes' : 'no'}
+      </div>
+
+      <div>
+        <strong>Merge Selected:</strong> {mergeState.selectedSource}
+      </div>
+
+      <div>
+        <strong>Merge Transfers:</strong> A: {mergeState.cumulativeTransfersA}, B: {mergeState.cumulativeTransfersB}, C: {mergeState.cumulativeTransfersC}
       </div>
 
       <div style={{ marginTop: 8 }}>
