@@ -1,68 +1,121 @@
-# React + TypeScript + Vite
+# Conveyor Simulation
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A deterministic React and TypeScript simulation of a three-branch conveyor system. The application models ASRS retrieval missions, exchanger induction, hybrid accumulation piles, strict round-robin merge arbitration, downstream accumulation, and Körber consumption.
 
-Currently, two official plugins are available:
+## Current status
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Milestone 6A stabilizes the existing Milestone 6 model. It adds deterministic validation for tray identity, physical placement, pile spacing, material balance, merge fairness, and SVG rendering integrity. It does not add new conveyor topology.
 
-## React Compiler
+## Implemented topology
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+The browser application uses these configured segments:
 
-## Expanding the Oxlint configuration
+- A1 → A1T → T → D
+- B1 → B1T → T → D
+- C1 → T → D
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+All configured conveyors run at 120 ft/min, or 2 ft/s. The simulation advances internally in deterministic 0.1-second ticks regardless of the UI playback multiplier.
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+### Hybrid accumulation piles
+
+A1, B1, and C1 are hybrid piles containing discrete MDR zones and a continuous middle belt. MDR zones allow one tray each. A stopped tray is centered in its zone, and a downstream vacancy propagates upstream one zone at a time.
+
+| Pile | Upstream MDR | Belt | Downstream MDR | Nominal positions |
+| --- | ---: | ---: | ---: | ---: |
+| A1 | 8 × 2.5 ft | 23.5 ft | 15 × 2.5 ft | 24 |
+| B1 | 8 × 2.5 ft | 43.5 ft | 7 × 2.5 ft | 16 |
+| C1 | 8 × 2.5 ft | 43.5 ft | 7 × 2.5 ft | 16 |
+
+Each pile is 81 ft long. Trays are 2 ft long. Initialized trays and exchanger-created trays use the same authoritative pile-placement representation and movement rules.
+
+D remains on the legacy accumulation model and is initialized with 73 trays.
+
+## Control behavior
+
+### ASRS and exchangers
+
+Consumption creates replenishment demand. ASRS missions are assigned across A, B, and C, take 180 simulated seconds to retrieve, and then wait at their assigned exchanger. An exchanger enforces an eight-second release headway and may induct a tray only when upstream MDR zone 0 is physically free.
+
+Pile exits require positive purge demand. Internal vacancy propagation does not require separate purge authorization.
+
+### Merge arbitration
+
+Eligible A, B, and C feeders use strict round-robin arbitration. The cursor starts at A, advances only after a successful transfer, skips ineligible branches, and allows a skipped branch to re-enter when the cursor next reaches it. Reset restores the cursor to A.
+
+### Körber consumption
+
+Körber removes the downstream-most available tray from D at 1,050 trays/hour. Successful removal increments the consumed-tray count and drives replenishment demand.
+
+## Accounting and physical invariants
+
+The engine reports:
+
+- `createdTrayCount`: initial inventory plus trays introduced at runtime;
+- `physicalTrayCount`: trays currently present in the conveyor system;
+- `consumedTrayCount`: trays successfully removed by Körber.
+
+Material balance is:
+
+```text
+materialBalanceError = createdTrayCount - physicalTrayCount - consumedTrayCount
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Normal operation enforces:
 
-## Milestone 6 — Hybrid Accumulation Model
+```text
+createdTrayCount = physicalTrayCount + consumedTrayCount
+```
 
-This project models A1/B1/C1 as hybrid accumulation piles composed of discrete MDR zones and a continuous belt.
+Automated invariants also require:
 
-Key assumptions:
-- Tray length: 2.0 ft
-- MDR zone length: 2.5 ft
-- One tray maximum per MDR zone; trays are centered in zones when stopped
-- MDR banks: discrete zone-by-zone cascade behavior (implemented incrementally)
-- Middle belt: continuous driven belt, speed 120 ft/min (2 ft/s), may contain multiple trays
-- TargetCount remains logical (A1=24, B1=16, C1=16) and is not a hard physical cap
-- PurgeDemand authorizes logical-pile exits only; internal propagation is automatic
+- globally unique tray IDs;
+- one tray ID in one physical location;
+- valid segment and pile-region boundaries;
+- no overlap within hybrid piles;
+- downstream blocking propagating upstream;
+- initialized and runtime-created trays following the same pile rules;
+- immutable state snapshots for rendering.
 
-Internal layouts (derived from 81-ft total lengths):
+## User interface
 
-- A1: 8 upstream MDR + 23.5-ft belt + 15 downstream MDR (23 MDR positions + 1 belt design position = 24 nominal positions)
-- B1: 8 upstream MDR + 43.5-ft belt + 7 downstream MDR (15 MDR positions + 1 belt design position = 16 nominal positions)
-- C1: same as B1
+The application provides:
 
-Notes:
-- D remains on the older physical model for now.
-- The belt and MDR rendering is visual-only; visualization geometry does not alter physical simulation geometry except where hybrid pile diagnostics are used.
+- play and pause;
+- a one-second manual step;
+- reset;
+- 1×, 5×, 20×, and 100× playback;
+- source, merge, occupancy, movement, and material-balance diagnostics;
+- a schematic SVG view of exchangers, hybrid piles, transport conveyors, and trays.
 
-## Hybrid Pile Vacancy Propagation (Runtime)
+## Development
 
-Important runtime guarantees implemented for Milestone 6:
+Requirements: Node.js and npm.
 
-- Initial trays produced at `reset()` are full-fledged `Tray` objects and participate in the same physics as dynamically released trays.
-- The pile internals (upstream MDR, belt, downstream MDR) are governed by a discrete zone-by-zone model that enforces one tray per MDR zone and zone transfer timing.
-- Vacancy originates at the downstream end and propagates upstream one zone at a time according to the MDR transfer time (zone length / speed).
-- Exchanger entry is allowed only when the first upstream MDR zone is physically free (and not merely by logical counts). Ready missions remain `READY_AT_EXCHANGER` until physical induction is possible.
-- Trays leaving a pile clear their internal `pilePlacement` and then rejoin the regular conveyor movement model.
+```bash
+npm install
+npm run dev
+npm test -- --run
+npm run lint
+npm run build
+```
 
-See `src/simulation/SimulationEngine.ts` and `src/simulation/HybridAccumulationPile.ts` for implementation details.
+`npm run build` runs TypeScript project compilation before producing the Vite production bundle. A standalone type-check can be run with:
 
+```bash
+npx tsc -b
+```
+
+The current suite contains 42 deterministic tests across engine and SVG-rendering behavior.
+
+## Known limitations
+
+- D remains on the legacy accumulation model.
+- Topology and most physical/control parameters remain substantially hard-coded.
+- Browser-level interactive control behavior is source-audited and manually inspectable but is not DOM-tested.
+- The visualization is schematic and is not derived from CAD geometry.
+- Full piles produce dense tray-number labels.
+- No bypass-lane expansion is implemented.
+
+## Next planned milestone
+
+The next milestone should be scoped after the Milestone 6A baseline is accepted. Likely work includes deciding whether D should adopt the hybrid model and adding browser-level interaction coverage; neither is implemented in the current baseline.

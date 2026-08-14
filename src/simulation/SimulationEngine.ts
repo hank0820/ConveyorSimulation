@@ -59,7 +59,6 @@ export class SimulationEngine {
     this.segmentsOrder = segmentConfigs
     this.trayPitchFt = options?.trayPitchFt ?? 3.0
     // physical tray length and MDR zone length for Milestone 6
-    this.trayPitchFt = options?.trayPitchFt ?? 3.0
     const trayLengthFt = 2.0
     const mdrZoneLengthFt = 2.5
     const rate = options?.sourceRatePerHour ?? 450
@@ -93,9 +92,6 @@ export class SimulationEngine {
       cumulativeTransfersB: 0,
       cumulativeTransfersC: 0,
     }
-
-    // determine legacy vs Milestone5 mode: legacy when B1/C1 absent
-    this.useLegacySources = !(this.segmentsMap.has('B1') && this.segmentsMap.has('C1'))
 
     // create hybrid piles for A1/B1/C1 when present
     if (this.segmentsMap.has('A1')) {
@@ -673,16 +669,8 @@ export class SimulationEngine {
     this.mergeState.eligibleB = eligible.B
     this.mergeState.eligibleC = eligible.C
 
-    // prefer control-selected source if set and eligible
-    if (this.mergeState.selectedSource !== 'NONE') {
-      const sel = this.mergeState.selectedSource
-      if (eligible[sel]) {
-        this.transferFromFeederToT(sel)
-        return
-      }
-    }
-
-    // fallback to physical RR selection
+    // Physical merge arbitration is strict round-robin from the cursor.
+    this.mergeState.selectedSource = 'NONE'
     const selected = this.selectMergeSource(eligible)
     if (selected !== 'NONE') {
       this.mergeState.selectedSource = selected

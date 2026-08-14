@@ -22,8 +22,6 @@ function App() {
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
 
   // animation loop
-
-  // animation loop
   useEffect(() => {
     let raf = 0
     let last = performance.now()
