@@ -95,6 +95,16 @@ export interface SegmentStats {
   occupancyPct?: number
 }
 
+export interface BeltDiagnostic {
+  pileId: 'A1' | 'B1' | 'C1'
+  beltRunning: boolean
+  beltExitAvailable: boolean
+  beltBlockedReason: 'DOWNSTREAM_MDR_ENTRANCE_OCCUPIED' | null
+  beltTrayCount: number
+  leadingBeltTrayId: number | null
+  leadingBeltTrayPositionFt: number | null
+}
+
 export interface SimulationState {
   timeSec: number
   trays: Tray[]
@@ -147,6 +157,7 @@ export interface SimulationState {
   pileAuthorizedExitA: boolean
   pileAuthorizedExitB: boolean
   pileAuthorizedExitC: boolean
+  beltDiagnostics: BeltDiagnostic[]
   slugCursor: SourceId
   activeSlug: ActiveSlugState | null
   lastCompletedSlug: ActiveSlugState | null

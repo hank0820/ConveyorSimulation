@@ -1,6 +1,7 @@
 import HybridAccumulationPile from './HybridAccumulationPile'
 import type {
   ActiveSlugState,
+  BeltDiagnostic,
   ConveyorSegmentConfig,
   MergeState,
   Mission,
@@ -52,6 +53,7 @@ export default class Milestone7Simulation {
   private korberStarved = false
   private lastConsumedTrayId: number | null = null
   private cumulativeTransfers: Record<SourceId, number> = { A: 0, B: 0, C: 0 }
+  private beltDiagnostics = new Map<string, BeltDiagnostic>()
 
   constructor(segments: ConveyorSegmentConfig[]) {
     this.segments = segments
@@ -79,6 +81,7 @@ export default class Milestone7Simulation {
     this.korberStarved = false
     this.lastConsumedTrayId = null
     this.cumulativeTransfers = { A: 0, B: 0, C: 0 }
+    this.beltDiagnostics.clear()
 
     let nextId = 1
     for (const source of ['A', 'B', 'C'] as SourceId[]) {
@@ -176,7 +179,6 @@ export default class Milestone7Simulation {
 
   private processPiles(delta: number) {
     for (const [pileId, pile] of this.piles) {
-      let residualElapsedSec = 0
       const cfg = pile.config
       const up: (Tray | null)[] = Array(cfg.upstreamMdrCount).fill(null)
       const down: (Tray | null)[] = Array(cfg.downstreamMdrCount).fill(null)
@@ -192,18 +194,20 @@ export default class Milestone7Simulation {
         }
       }
       refresh()
+
+      // Complete MDR-to-MDR transfers first. The final upstream zone is handled
+      // later because entry onto a mechanically coupled belt is interlocked.
       for (const tray of this.trays) {
         if (tray.pilePlacement?.pileId !== pileId || !tray.pileRuntime?.transferRemainingSec) continue
+        const placement = tray.pilePlacement
+        const isBeltEntry = placement.component === 'MDR_UPSTREAM'
+          && placement.zoneIndex === cfg.upstreamMdrCount - 1
+        if (isBeltEntry) continue
         tray.pileRuntime.transferRemainingSec -= delta
         if (tray.pileRuntime.transferRemainingSec <= EPS) {
-          residualElapsedSec = Math.max(residualElapsedSec, -tray.pileRuntime.transferRemainingSec)
-          const placement = tray.pilePlacement
           if (placement.component === 'MDR_UPSTREAM') {
             const index = placement.zoneIndex ?? 0
             if (index + 1 < cfg.upstreamMdrCount) placement.zoneIndex = index + 1
-            else {
-              placement.component = 'BELT'; placement.zoneIndex = undefined; placement.beltPosFt = TRAY_LENGTH_FT / 2
-            }
           } else if (placement.component === 'MDR_DOWNSTREAM') {
             placement.zoneIndex = (placement.zoneIndex ?? 0) + 1
           }
@@ -213,30 +217,68 @@ export default class Milestone7Simulation {
       refresh()
       for (let index = cfg.downstreamMdrCount - 2; index >= 0; index--) {
         const source = down[index]
-        if (source && !down[index + 1] && !source.pileRuntime) source.pileRuntime = { transferring: true, transferRemainingSec: ZONE_TRANSFER_SEC - residualElapsedSec }
+        if (source && !down[index + 1] && !source.pileRuntime) source.pileRuntime = { transferring: true, transferRemainingSec: ZONE_TRANSFER_SEC }
       }
-      if (!down[0] && belt.length) {
-        const front = belt.sort((a, b) => (b.pilePlacement!.beltPosFt ?? 0) - (a.pilePlacement!.beltPosFt ?? 0))[0]
-        if ((front.pilePlacement!.beltPosFt ?? 0) >= cfg.beltLengthFt - TRAY_LENGTH_FT - EPS) {
-          front.pilePlacement = { pileId, component: 'MDR_DOWNSTREAM', zoneIndex: 0 }
-          belt.splice(belt.indexOf(front), 1)
+
+      // Zone zero is the physical belt discharge destination. Its current,
+      // rebuilt occupancy is the single authoritative interlock for this tick.
+      const beltExitAvailable = down[0] === null
+      const beltRunning = beltExitAvailable
+      const beltBlockedReason = beltRunning ? null : 'DOWNSTREAM_MDR_ENTRANCE_OCCUPIED' as const
+
+      belt.sort((a, b) => (a.pilePlacement!.beltPosFt ?? 0) - (b.pilePlacement!.beltPosFt ?? 0))
+      let leading = belt.at(-1)
+
+      // A tray already at the discharge transfers before the shared belt
+      // translation. Remaining belt trays still receive only this tick's delta.
+      if (beltRunning && leading && (leading.pilePlacement!.beltPosFt ?? 0) >= cfg.beltLengthFt - TRAY_LENGTH_FT - EPS) {
+        leading.pilePlacement = { pileId, component: 'MDR_DOWNSTREAM', zoneIndex: 0 }
+        belt.pop()
+        down[0] = leading
+        leading = belt.at(-1)
+      }
+
+      if (beltRunning && belt.length) {
+        const requestedDelta = SPEED_FT_PER_SEC * delta
+        const leadingPosition = leading!.pilePlacement!.beltPosFt ?? 0
+        const sharedDelta = Math.max(0, Math.min(requestedDelta, cfg.beltLengthFt - TRAY_LENGTH_FT - leadingPosition))
+        for (const tray of belt) {
+          tray.pilePlacement!.beltPosFt = (tray.pilePlacement!.beltPosFt ?? 0) + sharedDelta
+          tray.status = 'MOVING'
         }
+      } else {
+        for (const tray of belt) tray.status = 'BLOCKED'
       }
+
+      // Entry uses the same interlock decision and the post-transfer/post-motion
+      // belt positions. A stopped tick never consumes an entry transfer timer.
       const nearestBelt = belt.length ? Math.min(...belt.map((tray) => tray.pilePlacement!.beltPosFt ?? 0)) : Infinity
       const upLast = up[cfg.upstreamMdrCount - 1]
-      if (upLast && nearestBelt - TRAY_LENGTH_FT / 2 >= TRAY_LENGTH_FT - EPS && !upLast.pileRuntime) {
-        upLast.pileRuntime = { transferring: true, transferRemainingSec: ZONE_TRANSFER_SEC - residualElapsedSec }
+      const entranceHasSpace = nearestBelt - TRAY_LENGTH_FT / 2 >= TRAY_LENGTH_FT - EPS
+      if (beltRunning && upLast && entranceHasSpace) {
+        if (!upLast.pileRuntime) {
+          upLast.pileRuntime = { transferring: true, transferRemainingSec: ZONE_TRANSFER_SEC }
+        } else {
+          upLast.pileRuntime.transferRemainingSec = (upLast.pileRuntime.transferRemainingSec ?? ZONE_TRANSFER_SEC) - delta
+          if (upLast.pileRuntime.transferRemainingSec <= EPS) {
+            upLast.pilePlacement = { pileId, component: 'BELT', beltPosFt: TRAY_LENGTH_FT / 2 }
+            upLast.pileRuntime = undefined
+            belt.push(upLast)
+            up[cfg.upstreamMdrCount - 1] = null
+          }
+        }
       }
       for (let index = cfg.upstreamMdrCount - 2; index >= 0; index--) {
         const source = up[index]
-        if (source && !up[index + 1] && !source.pileRuntime) source.pileRuntime = { transferring: true, transferRemainingSec: ZONE_TRANSFER_SEC - residualElapsedSec }
+        if (source && !up[index + 1] && !source.pileRuntime) source.pileRuntime = { transferring: true, transferRemainingSec: ZONE_TRANSFER_SEC }
       }
-      belt.sort((a, b) => (a.pilePlacement!.beltPosFt ?? 0) - (b.pilePlacement!.beltPosFt ?? 0))
-      for (let index = belt.length - 1; index >= 0; index--) {
-        const tray = belt[index]
-        const ahead = index + 1 < belt.length ? belt[index + 1].pilePlacement!.beltPosFt! - TRAY_LENGTH_FT : cfg.beltLengthFt - TRAY_LENGTH_FT
-        tray.pilePlacement!.beltPosFt = Math.max(TRAY_LENGTH_FT / 2, Math.min(ahead, (tray.pilePlacement!.beltPosFt ?? 0) + SPEED_FT_PER_SEC * delta))
-      }
+
+      leading = belt.sort((a, b) => (a.pilePlacement!.beltPosFt ?? 0) - (b.pilePlacement!.beltPosFt ?? 0)).at(-1)
+      this.beltDiagnostics.set(pileId, {
+        pileId: pileId as BeltDiagnostic['pileId'], beltRunning, beltExitAvailable, beltBlockedReason,
+        beltTrayCount: belt.length, leadingBeltTrayId: leading?.id ?? null,
+        leadingBeltTrayPositionFt: leading?.pilePlacement?.beltPosFt ?? null,
+      })
     }
   }
 
@@ -369,6 +411,14 @@ export default class Milestone7Simulation {
     }
     const dFinal = Boolean(this.zonedOccupancy('D')[ZONE_COUNTS.D - 1])
     const segmentStats = this.segments.map((segment) => ({ id: segment.id, occupancy: this.trays.filter((tray) => tray.currentSegmentId === segment.id).length, capacity: segment.maxOccupancy, occupancyPct: segment.maxOccupancy ? this.trays.filter((tray) => tray.currentSegmentId === segment.id).length / segment.maxOccupancy * 100 : undefined }))
+    const beltDiagnostic = (pileId: BeltDiagnostic['pileId']): BeltDiagnostic => this.beltDiagnostics.get(pileId) ?? (() => {
+      const belt = this.trays.filter((tray) => tray.pilePlacement?.pileId === pileId && tray.pilePlacement.component === 'BELT')
+        .sort((a, b) => (a.pilePlacement!.beltPosFt ?? 0) - (b.pilePlacement!.beltPosFt ?? 0))
+      const exitAvailable = !this.trays.some((tray) => tray.pilePlacement?.pileId === pileId && tray.pilePlacement.component === 'MDR_DOWNSTREAM' && tray.pilePlacement.zoneIndex === 0)
+      const leading = belt.at(-1)
+      return { pileId, beltRunning: exitAvailable, beltExitAvailable: exitAvailable, beltBlockedReason: exitAvailable ? null : 'DOWNSTREAM_MDR_ENTRANCE_OCCUPIED', beltTrayCount: belt.length, leadingBeltTrayId: leading?.id ?? null, leadingBeltTrayPositionFt: leading?.pilePlacement?.beltPosFt ?? null }
+    })()
+    const beltDiagnostics = (['A1', 'B1', 'C1'] as const).map(beltDiagnostic)
     return {
       timeSec: this.timeSec,
       trays: this.trays.map((tray) => ({ ...tray, pilePlacement: tray.pilePlacement ? { ...tray.pilePlacement } : undefined, zonePlacement: tray.zonePlacement ? { ...tray.zonePlacement } : undefined, pileRuntime: tray.pileRuntime ? { ...tray.pileRuntime } : undefined })),
@@ -377,10 +427,11 @@ export default class Milestone7Simulation {
       missions: this.missions.map((mission) => ({ ...mission })), pendingA: pending('A'), pendingB: pending('B'), pendingC: pending('C'), retrievingA: retrieving('A'), retrievingB: retrieving('B'), retrievingC: retrieving('C'), readyA: ready('A'), readyB: ready('B'), readyC: ready('C'),
       additionalASRSDemand: Math.max(0, 150 - physical - pending('A') - pending('B') - pending('C')), globalTargetCount: 150, globalCurrentCount: physical, transportInventory: this.zonedOccupancy('PRE_T').filter(Boolean).length + this.zonedOccupancy('T').filter(Boolean).length, physicalPreKorberInventory: physical,
       purgeDemandA: 0, purgeDemandB: 0, purgeDemandC: 0, asrsNextAssign: this.asrsNextAssign, asrsAssignedA: this.asrsAssigned.A, asrsAssignedB: this.asrsAssigned.B, asrsAssignedC: this.asrsAssigned.C,
-      upstreamMdrA: pileCount('A', 'MDR_UPSTREAM'), beltCountA: pileCount('A', 'BELT'), downstreamMdrA: pileCount('A', 'MDR_DOWNSTREAM'), beltRunningA: true,
-      upstreamMdrB: pileCount('B', 'MDR_UPSTREAM'), beltCountB: pileCount('B', 'BELT'), downstreamMdrB: pileCount('B', 'MDR_DOWNSTREAM'), beltRunningB: true,
-      upstreamMdrC: pileCount('C', 'MDR_UPSTREAM'), beltCountC: pileCount('C', 'BELT'), downstreamMdrC: pileCount('C', 'MDR_DOWNSTREAM'), beltRunningC: true,
+      upstreamMdrA: pileCount('A', 'MDR_UPSTREAM'), beltCountA: pileCount('A', 'BELT'), downstreamMdrA: pileCount('A', 'MDR_DOWNSTREAM'), beltRunningA: beltDiagnostics[0].beltRunning,
+      upstreamMdrB: pileCount('B', 'MDR_UPSTREAM'), beltCountB: pileCount('B', 'BELT'), downstreamMdrB: pileCount('B', 'MDR_DOWNSTREAM'), beltRunningB: beltDiagnostics[1].beltRunning,
+      upstreamMdrC: pileCount('C', 'MDR_UPSTREAM'), beltCountC: pileCount('C', 'BELT'), downstreamMdrC: pileCount('C', 'MDR_DOWNSTREAM'), beltRunningC: beltDiagnostics[2].beltRunning,
       pileAuthorizedExitA: this.activeSlug?.source === 'A', pileAuthorizedExitB: this.activeSlug?.source === 'B', pileAuthorizedExitC: this.activeSlug?.source === 'C',
+      beltDiagnostics,
       segmentStats, movingCount: this.trays.filter((tray) => tray.status === 'MOVING').length, blockedCount: this.trays.filter((tray) => tray.status === 'BLOCKED').length,
       totalTraysCreated: this.totalTraysCreated, createdTrayCount: this.totalTraysCreated, physicalTrayCount: physical, consumedTrayCount: this.consumedCount, materialBalanceError: this.totalTraysCreated - physical - this.consumedCount,
       slugCursor: this.slugCursor, activeSlug: this.activeSlug ? { ...this.activeSlug, authorizedTrayIds: [...this.activeSlug.authorizedTrayIds] } : null, lastCompletedSlug: this.lastCompletedSlug ? { ...this.lastCompletedSlug, authorizedTrayIds: [...this.lastCompletedSlug.authorizedTrayIds] } : null,

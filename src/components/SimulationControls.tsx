@@ -81,6 +81,11 @@ const SimulationControls: FC<Props> = ({
       </div>
 
       <div style={{ marginTop: 8 }}>
+        <strong>Middle Belts:</strong>{' '}
+        {state.beltDiagnostics.map((belt) => `${belt.pileId} ${belt.beltRunning ? 'RUNNING' : 'STOPPED'}`).join(' · ')}
+      </div>
+
+      <div style={{ marginTop: 8 }}>
         <button onClick={onPlayPause}>{playing ? 'Pause' : 'Play'}</button>
         <button onClick={onStep} style={{ marginLeft: 8 }}>Step +1 sec</button>
         <button onClick={onReset} style={{ marginLeft: 8 }}>Reset</button>
