@@ -852,11 +852,11 @@ export class SimulationEngine {
         this.populateInitialPile('C1', 16, 'C')
       }
 
+      // Register hybrid-pile IDs before legacy D creates trays through createTrayAt.
+      this.totalTraysCreated = nextId - 1
+
       // D remains legacy
       this.populateInitialPile('D', 73, 'A')
-
-      // update totalTraysCreated to reflect created trays
-      this.totalTraysCreated = nextId - 1
     }
   }
 
