@@ -306,17 +306,22 @@ export class SimulationEngine {
       const upstreamZones: (Tray | null)[] = Array(cfg.upstreamMdrCount).fill(null)
       const downstreamZones: (Tray | null)[] = Array(cfg.downstreamMdrCount).fill(null)
       const beltTrays: Tray[] = []
-      for (const t of this.trays) {
-        if (!t.pilePlacement) continue
-        if (t.pilePlacement.pileId !== pileId) continue
-        if (t.pilePlacement.component === 'MDR_UPSTREAM') {
-          upstreamZones[t.pilePlacement.zoneIndex ?? 0] = t
-        } else if (t.pilePlacement.component === 'MDR_DOWNSTREAM') {
-          downstreamZones[t.pilePlacement.zoneIndex ?? 0] = t
-        } else if (t.pilePlacement.component === 'BELT') {
-          beltTrays.push(t)
+      const refreshOccupancy = () => {
+        upstreamZones.fill(null)
+        downstreamZones.fill(null)
+        beltTrays.length = 0
+        for (const t of this.trays) {
+          if (!t.pilePlacement || t.pilePlacement.pileId !== pileId) continue
+          if (t.pilePlacement.component === 'MDR_UPSTREAM') {
+            upstreamZones[t.pilePlacement.zoneIndex ?? 0] = t
+          } else if (t.pilePlacement.component === 'MDR_DOWNSTREAM') {
+            downstreamZones[t.pilePlacement.zoneIndex ?? 0] = t
+          } else if (t.pilePlacement.component === 'BELT') {
+            beltTrays.push(t)
+          }
         }
       }
+      refreshOccupancy()
 
       // 1) attempt downstream exit: final downstream zone -> next segment
       const finalIdx = cfg.downstreamMdrCount - 1
@@ -345,7 +350,8 @@ export class SimulationEngine {
               } else {
                 // transfer onto belt
                 t.pilePlacement.component = 'BELT'
-                t.pilePlacement.beltPosFt = 0
+                t.pilePlacement.zoneIndex = undefined
+                t.pilePlacement.beltPosFt = cfg.trayLengthFt / 2
               }
             } else if (t.pilePlacement.component === 'MDR_DOWNSTREAM') {
               const zi = t.pilePlacement.zoneIndex ?? 0
@@ -359,6 +365,9 @@ export class SimulationEngine {
           }
         }
       }
+      // Transfer completion changes authoritative zone placement. Rebuild the
+      // occupancy snapshot before deciding which destinations are available.
+      refreshOccupancy()
 
       // 3) start new downstream cascades (downstream zones move toward final)
       for (let i = cfg.downstreamMdrCount - 2; i >= 0; i--) {
@@ -382,15 +391,29 @@ export class SimulationEngine {
           // remove belt placement, set downstream placement
           front.pilePlacement = { pileId, component: 'MDR_DOWNSTREAM', zoneIndex: 0 }
           front.pileRuntime = undefined
+          beltTrays.splice(beltTrays.indexOf(front), 1)
         }
       }
 
       // 5) upstream -> belt transfer: if belt head has space and upstream last zone ready
       const upstreamLastIdx = cfg.upstreamMdrCount - 1
       const upLast = upstreamZones[upstreamLastIdx]
-      const beltHasSpace = beltTrays.length === 0 || (beltTrays.some(bt => (bt.pilePlacement!.beltPosFt ?? 0) > cfg.trayLengthFt + 1e-6))
+      const beltEntranceCenter = cfg.trayLengthFt / 2
+      const nearestBeltTray = beltTrays.length === 0
+        ? Infinity
+        : Math.min(...beltTrays.map((bt) => bt.pilePlacement!.beltPosFt ?? 0))
+      const beltHasSpace = nearestBeltTray - beltEntranceCenter >= cfg.trayLengthFt - EPS
       if (upLast && beltHasSpace && !(upLast.pileRuntime && upLast.pileRuntime.transferRemainingSec && upLast.pileRuntime.transferRemainingSec > 0)) {
         upLast.pileRuntime = { transferring: true, transferRemainingSec: transferTime }
+      }
+
+      // Propagate a belt-entry vacancy upstream one MDR zone at a time.
+      for (let i = cfg.upstreamMdrCount - 2; i >= 0; i--) {
+        const src = upstreamZones[i]
+        const dst = upstreamZones[i + 1]
+        if (src && !dst && !(src.pileRuntime && src.pileRuntime.transferRemainingSec && src.pileRuntime.transferRemainingSec > 0)) {
+          src.pileRuntime = { transferring: true, transferRemainingSec: transferTime }
+        }
       }
 
       // 6) belt motion: advance belt trays if beltRunning; enforce spacing and stop if blocked by downstream fullness
@@ -414,7 +437,7 @@ export class SimulationEngine {
             const nextPos = next.pilePlacement!.beltPosFt ?? 0
             desired = Math.min(desired, nextPos - cfg.trayLengthFt)
           }
-          bt.pilePlacement!.beltPosFt = desired
+          bt.pilePlacement!.beltPosFt = Math.max(beltEntranceCenter, desired)
         }
       }
     }
@@ -726,6 +749,16 @@ export class SimulationEngine {
     }
     const allowedIntoNext = this.allowedEntryDistance(nextId)
     if (allowedIntoNext <= EPS) return false
+    if (this.piles.has(nextId)) {
+      if (!this.canEnterSegment(nextId, 0)) return false
+      const pile = this.piles.get(nextId)!
+      t.currentSegmentId = nextId
+      t.positionFt = pile.config.mdrZoneLengthFt / 2
+      t.pilePlacement = { pileId: nextId, component: 'MDR_UPSTREAM', zoneIndex: 0 }
+      t.pileRuntime = undefined
+      t.status = 'BLOCKED'
+      return true
+    }
     t.currentSegmentId = nextId
     const enterDist = Math.min(distance, allowedIntoNext)
     t.positionFt = enterDist
@@ -741,11 +774,27 @@ export class SimulationEngine {
   private allowedEntryDistance(segmentId: string): number {
     const segCfg = this.segmentsMap.get(segmentId)?.config
     if (!segCfg) return 0
-    // for hybrid piles (A1/B1/C1) physical acceptance is handled by pile internals
     if (this.piles.has(segmentId)) {
-      // if pile exists, allow entry if there is any physical space (conservative stub)
-      // detailed per-zone logic implemented in pile model; for now, return Infinity to avoid hard cap
-      return Infinity
+      const pile = this.piles.get(segmentId)!
+      const cfg = pile.config
+      const physicalPositions = this.trays
+        .filter((t) => t.currentSegmentId === segmentId)
+        .map((t) => {
+          const placement = t.pilePlacement
+          if (!placement) return t.positionFt
+          if (placement.component === 'MDR_UPSTREAM') {
+            return ((placement.zoneIndex ?? 0) + 0.5) * cfg.mdrZoneLengthFt
+          }
+          if (placement.component === 'BELT') {
+            return cfg.upstreamMdrCount * cfg.mdrZoneLengthFt + (placement.beltPosFt ?? 0)
+          }
+          return cfg.upstreamMdrCount * cfg.mdrZoneLengthFt
+            + cfg.beltLengthFt
+            + ((placement.zoneIndex ?? 0) + 0.5) * cfg.mdrZoneLengthFt
+        })
+      if (physicalPositions.length === 0) return segCfg.lengthFt
+      const nearestTrayAhead = Math.min(...physicalPositions)
+      return Math.max(0, Math.min(segCfg.lengthFt, nearestTrayAhead - this.trayPitchFt))
     }
     const traysOn = this.trays.filter((t) => t.currentSegmentId === segmentId)
     const occupancy = traysOn.length
@@ -871,7 +920,10 @@ export class SimulationEngine {
     })
     const movingCount = this.trays.filter((t) => t.status === 'MOVING').length
     const blockedCount = this.trays.filter((t) => t.status === 'BLOCKED').length
-    const materialBalanceError = this.trays.length - this.totalTraysCreated
+    const createdTrayCount = this.totalTraysCreated
+    const physicalTrayCount = this.trays.length
+    const consumedTrayCount = this.korberTotalConsumed
+    const materialBalanceError = createdTrayCount - physicalTrayCount - consumedTrayCount
     const sources = this.sourcesState.map((s) => ({ ...s }))
     const sourceState = sources[0] ?? {
       id: 'A' as SourceId,
@@ -978,6 +1030,9 @@ export class SimulationEngine {
       movingCount,
       blockedCount,
       totalTraysCreated: this.totalTraysCreated,
+      createdTrayCount,
+      physicalTrayCount,
+      consumedTrayCount,
       materialBalanceError,
       upstreamMdrA,
       beltCountA,

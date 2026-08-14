@@ -134,7 +134,11 @@ export interface SimulationState {
   segmentStats: SegmentStats[]
   movingCount: number
   blockedCount: number
+  // Includes initial inventory created during reset and runtime exchanger releases.
   totalTraysCreated: number
+  createdTrayCount: number
+  physicalTrayCount: number
+  consumedTrayCount: number
   materialBalanceError: number
 }
 
