@@ -9,6 +9,18 @@ export interface Tray {
   status: TrayStatus
   createdAtSec: number
   originSourceId: SourceId
+  // optional physical placement inside a logical hybrid pile
+  pilePlacement?: {
+    pileId: string // e.g. 'A1','B1','C1'
+    component: 'MDR_UPSTREAM' | 'BELT' | 'MDR_DOWNSTREAM'
+    zoneIndex?: number // for MDR zones, 0-based from upstream
+    beltPosFt?: number // for belt trays: position along belt (0..beltLength)
+  }
+  // runtime state used by hybrid pile physics
+  pileRuntime?: {
+    transferring?: boolean
+    transferRemainingSec?: number
+  }
 }
 
 export interface ConveyorSegmentConfig {
@@ -103,6 +115,22 @@ export interface SimulationState {
   asrsAssignedA: number
   asrsAssignedB: number
   asrsAssignedC: number
+  // Milestone 6 hybrid pile diagnostics
+  upstreamMdrA: number
+  beltCountA: number
+  downstreamMdrA: number
+  beltRunningA: boolean
+  upstreamMdrB: number
+  beltCountB: number
+  downstreamMdrB: number
+  beltRunningB: boolean
+  upstreamMdrC: number
+  beltCountC: number
+  downstreamMdrC: number
+  beltRunningC: boolean
+  pileAuthorizedExitA: boolean
+  pileAuthorizedExitB: boolean
+  pileAuthorizedExitC: boolean
   segmentStats: SegmentStats[]
   movingCount: number
   blockedCount: number

@@ -1,5 +1,6 @@
 import type { Tray, ConveyorSegmentConfig, SimulationStateWithProgress, SourceConfig, SourceId, MergeState, SourceState } from './types'
 import ConveyorSegment from './ConveyorSegment'
+import HybridAccumulationPile from './HybridAccumulationPile'
 
 const INTERNAL_TICK_SECONDS = 0.1
 const EPS = 1e-9
@@ -41,6 +42,8 @@ export class SimulationEngine {
 
   // merge arbitration
   private mergeState: MergeState
+  // hybrid pile models for A1/B1/C1
+  private piles: Map<string, HybridAccumulationPile> = new Map()
   // compatibility: use legacy periodic source injection when topology is small
   private useLegacySources: boolean
 
@@ -55,6 +58,10 @@ export class SimulationEngine {
     this.segmentsMap = new Map(segmentConfigs.map((c) => [c.id, new ConveyorSegment(c)]))
     this.segmentsOrder = segmentConfigs
     this.trayPitchFt = options?.trayPitchFt ?? 3.0
+    // physical tray length and MDR zone length for Milestone 6
+    this.trayPitchFt = options?.trayPitchFt ?? 3.0
+    const trayLengthFt = 2.0
+    const mdrZoneLengthFt = 2.5
     const rate = options?.sourceRatePerHour ?? 450
     this.sourceHeadwaySec = 3600 / rate
     this.sourcesConfig = options?.sourcesConfig ?? DEFAULT_SOURCE_CONFIGS
@@ -89,6 +96,41 @@ export class SimulationEngine {
 
     // determine legacy vs Milestone5 mode: legacy when B1/C1 absent
     this.useLegacySources = !(this.segmentsMap.has('B1') && this.segmentsMap.has('C1'))
+
+    // create hybrid piles for A1/B1/C1 when present
+    if (this.segmentsMap.has('A1')) {
+      this.piles.set('A1', new HybridAccumulationPile({
+        pileId: 'A1',
+        totalLengthFt: this.segmentsMap.get('A1')!.config.lengthFt,
+        upstreamMdrCount: 8,
+        downstreamMdrCount: 15,
+        beltLengthFt: 23.5,
+        mdrZoneLengthFt,
+        trayLengthFt,
+      }))
+    }
+    if (this.segmentsMap.has('B1')) {
+      this.piles.set('B1', new HybridAccumulationPile({
+        pileId: 'B1',
+        totalLengthFt: this.segmentsMap.get('B1')!.config.lengthFt,
+        upstreamMdrCount: 8,
+        downstreamMdrCount: 7,
+        beltLengthFt: 43.5,
+        mdrZoneLengthFt,
+        trayLengthFt,
+      }))
+    }
+    if (this.segmentsMap.has('C1')) {
+      this.piles.set('C1', new HybridAccumulationPile({
+        pileId: 'C1',
+        totalLengthFt: this.segmentsMap.get('C1')!.config.lengthFt,
+        upstreamMdrCount: 8,
+        downstreamMdrCount: 7,
+        beltLengthFt: 43.5,
+        mdrZoneLengthFt,
+        trayLengthFt,
+      }))
+    }
 
     this.tryInjectSources()
 
@@ -165,7 +207,14 @@ export class SimulationEngine {
     const segmentIndex: Record<string, number> = {}
     this.segmentsOrder.forEach((s, i) => (segmentIndex[s.id] = i))
 
-    const traysOrder = this.trays.slice().sort((a, b) => {
+    // process hybrid pile internal physics first when hybrid mode is active
+    if (!this.useLegacySources) this.processPilesTick(deltaSec)
+
+    // only move trays that are NOT managed by hybrid piles using generic segment movement
+    const traysOrder = this.trays
+      .filter((t) => !t.pilePlacement)
+      .slice()
+      .sort((a, b) => {
       const ia = segmentIndex[a.currentSegmentId]
       const ib = segmentIndex[b.currentSegmentId]
       if (ia !== ib) return ib - ia
@@ -245,8 +294,134 @@ export class SimulationEngine {
     }
   }
 
+  // Handle per-pile runtime: discrete MDR zone transfers, belt motion, and downstream exits
+  private processPilesTick(deltaSec: number) {
+    if (this.useLegacySources) return
+    for (const [pileId, pile] of this.piles.entries()) {
+      const cfg = pile.config
+      const speedFtPerSec = (this.segmentsMap.get(pileId)?.config.speedFtPerMin ?? 120) / 60
+      const transferTime = cfg.mdrZoneLengthFt / speedFtPerSec
+
+      // helpers to find trays in zones
+      const upstreamZones: (Tray | null)[] = Array(cfg.upstreamMdrCount).fill(null)
+      const downstreamZones: (Tray | null)[] = Array(cfg.downstreamMdrCount).fill(null)
+      const beltTrays: Tray[] = []
+      for (const t of this.trays) {
+        if (!t.pilePlacement) continue
+        if (t.pilePlacement.pileId !== pileId) continue
+        if (t.pilePlacement.component === 'MDR_UPSTREAM') {
+          upstreamZones[t.pilePlacement.zoneIndex ?? 0] = t
+        } else if (t.pilePlacement.component === 'MDR_DOWNSTREAM') {
+          downstreamZones[t.pilePlacement.zoneIndex ?? 0] = t
+        } else if (t.pilePlacement.component === 'BELT') {
+          beltTrays.push(t)
+        }
+      }
+
+      // 1) attempt downstream exit: final downstream zone -> next segment
+      const finalIdx = cfg.downstreamMdrCount - 1
+      const finalTray = downstreamZones[finalIdx]
+      if (finalTray) {
+        const nextSeg = this.segmentsMap.get(pileId)?.config.nextSegmentId
+        if (nextSeg) {
+          // tryTransferToNextSegment will enforce PurgeDemand and allowedEntryDistance
+          this.tryTransferToNextSegment(finalTray, pileId, nextSeg, 0)
+          // if transfer succeeded, tryTransferToNextSegment will have cleared pilePlacement
+        }
+      }
+
+      // 2) process in-progress transfers: decrement timers and complete zone moves
+      for (const t of this.trays) {
+        if (!t.pilePlacement) continue
+        if (t.pilePlacement.pileId !== pileId) continue
+        if (t.pileRuntime && t.pileRuntime.transferRemainingSec !== undefined && t.pileRuntime.transferRemainingSec > 0) {
+          t.pileRuntime.transferRemainingSec = Math.max(0, t.pileRuntime.transferRemainingSec - deltaSec)
+          if (t.pileRuntime.transferRemainingSec === 0) {
+            // finalize movement: move to next zone or onto belt
+            if (t.pilePlacement.component === 'MDR_UPSTREAM') {
+              const zi = t.pilePlacement.zoneIndex ?? 0
+              if (zi + 1 < cfg.upstreamMdrCount) {
+                t.pilePlacement.zoneIndex = zi + 1
+              } else {
+                // transfer onto belt
+                t.pilePlacement.component = 'BELT'
+                t.pilePlacement.beltPosFt = 0
+              }
+            } else if (t.pilePlacement.component === 'MDR_DOWNSTREAM') {
+              const zi = t.pilePlacement.zoneIndex ?? 0
+              if (zi + 1 < cfg.downstreamMdrCount) {
+                t.pilePlacement.zoneIndex = zi + 1
+              } else {
+                // already at final downstream; do nothing here (exit handled above)
+              }
+            }
+            t.pileRuntime = undefined
+          }
+        }
+      }
+
+      // 3) start new downstream cascades (downstream zones move toward final)
+      for (let i = cfg.downstreamMdrCount - 2; i >= 0; i--) {
+        const src = downstreamZones[i]
+        const dst = downstreamZones[i + 1]
+        if (src && !dst && !(src.pileRuntime && src.pileRuntime.transferRemainingSec && src.pileRuntime.transferRemainingSec > 0)) {
+          // start transfer from src -> dst
+          src.pileRuntime = { transferring: true, transferRemainingSec: transferTime }
+        }
+      }
+
+      // 4) belt -> downstream transfer: if downstreamZones[0] free and any belt tray at downstream end
+      const downstream0 = downstreamZones[0]
+      if (!downstream0 && beltTrays.length > 0) {
+        // find belt tray closest to downstream end
+        beltTrays.sort((a, b) => (b.pilePlacement!.beltPosFt ?? 0) - (a.pilePlacement!.beltPosFt ?? 0))
+        const front = beltTrays[0]
+        const frontPos = front.pilePlacement!.beltPosFt ?? 0
+        // if front sufficiently at downstream end, move into downstream zone 0
+        if (frontPos >= cfg.beltLengthFt - cfg.trayLengthFt - 1e-6) {
+          // remove belt placement, set downstream placement
+          front.pilePlacement = { pileId, component: 'MDR_DOWNSTREAM', zoneIndex: 0 }
+          front.pileRuntime = undefined
+        }
+      }
+
+      // 5) upstream -> belt transfer: if belt head has space and upstream last zone ready
+      const upstreamLastIdx = cfg.upstreamMdrCount - 1
+      const upLast = upstreamZones[upstreamLastIdx]
+      const beltHasSpace = beltTrays.length === 0 || (beltTrays.some(bt => (bt.pilePlacement!.beltPosFt ?? 0) > cfg.trayLengthFt + 1e-6))
+      if (upLast && beltHasSpace && !(upLast.pileRuntime && upLast.pileRuntime.transferRemainingSec && upLast.pileRuntime.transferRemainingSec > 0)) {
+        upLast.pileRuntime = { transferring: true, transferRemainingSec: transferTime }
+      }
+
+      // 6) belt motion: advance belt trays if beltRunning; enforce spacing and stop if blocked by downstream fullness
+      const pendingBy = this.countPendingByBranch()
+      const occDown = downstreamZones.filter(z => z !== null).length
+      const purgeDemand = (this.trays.filter((t) => t.currentSegmentId === pileId).length) - (this.segmentsMap.get(pileId)?.config.maxOccupancy ?? 0) + pendingBy[(pileId[0] as SourceId)]
+      const beltRunning = !(occDown >= cfg.downstreamMdrCount && purgeDemand <= 0)
+      if (beltTrays.length > 0 && beltRunning) {
+        const speed = speedFtPerSec
+        // sort ascending from upstream to downstream
+        beltTrays.sort((a, b) => (a.pilePlacement!.beltPosFt ?? 0) - (b.pilePlacement!.beltPosFt ?? 0))
+        for (let i = 0; i < beltTrays.length; i++) {
+          const bt = beltTrays[i]
+          const prevPos = bt.pilePlacement!.beltPosFt ?? 0
+          let desired = prevPos + speed * deltaSec
+          // enforce not passing downstream end
+          desired = Math.min(desired, cfg.beltLengthFt - cfg.trayLengthFt)
+          // enforce spacing with next downstream tray
+          if (i < beltTrays.length - 1) {
+            const next = beltTrays[i + 1]
+            const nextPos = next.pilePlacement!.beltPosFt ?? 0
+            desired = Math.min(desired, nextPos - cfg.trayLengthFt)
+          }
+          bt.pilePlacement!.beltPosFt = desired
+        }
+      }
+    }
+  }
+
   private findDownstreamNeighborOnSameSegment(tray: Tray): Tray | undefined {
-    const same = this.trays.filter((t) => t.currentSegmentId === tray.currentSegmentId && t.id !== tray.id)
+    const same = this.trays.filter((t) => t.currentSegmentId === tray.currentSegmentId && t.id !== tray.id && !t.pilePlacement)
     let candidates = same.filter((t) => t.positionFt > tray.positionFt + EPS)
     if (candidates.length === 0) return undefined
     candidates.sort((a, b) => a.positionFt - b.positionFt)
@@ -262,6 +437,11 @@ export class SimulationEngine {
       status: 'MOVING',
       createdAtSec: this.timeSec,
       originSourceId: origin,
+    }
+    // if creating directly into a hybrid pile and hybrid mode active, represent it as a pile-placed tray occupying upstream zone 0
+    if (!this.useLegacySources && this.piles.has(segmentId)) {
+      tray.pilePlacement = { pileId: segmentId, component: 'MDR_UPSTREAM', zoneIndex: 0 }
+      tray.status = 'BLOCKED'
     }
     return tray
   }
@@ -318,7 +498,8 @@ export class SimulationEngine {
     const occA = this.trays.filter((t) => t.currentSegmentId === 'A1').length
     const occB = this.trays.filter((t) => t.currentSegmentId === 'B1').length
     const occC = this.trays.filter((t) => t.currentSegmentId === 'C1').length
-    const currentCount = occA + occB + occC
+    const occD = this.trays.filter((t) => t.currentSegmentId === 'D').length
+    const currentCount = occA + occB + occC + occD
     const targetA = this.segmentsMap.get('A1')?.config.maxOccupancy ?? 24
     const targetB = this.segmentsMap.get('B1')?.config.maxOccupancy ?? 16
     const targetC = this.segmentsMap.get('C1')?.config.maxOccupancy ?? 16
@@ -530,17 +711,42 @@ export class SimulationEngine {
       const feeder = feederMap[currentSegmentId as keyof typeof feederMap]
       if (!this.useLegacySources && this.mergeState.selectedSource !== feeder) return false
     }
+    // If transferring from a hybrid pile final downstream MDR to its transport
+    // endpoint, require a positive PurgeDemand for that pile (authorization).
+    // Map pileId -> branch letter
+    const pileToBranch: Record<string, SourceId> = { A1: 'A', B1: 'B', C1: 'C' }
+    if (this.piles.has(currentSegmentId) && (nextId === 'A1T' || nextId === 'B1T' || nextId === 'T')) {
+      const branch = pileToBranch[currentSegmentId as keyof typeof pileToBranch]
+      // compute current occupancy for the pile
+      const occ = this.trays.filter((tr) => tr.currentSegmentId === currentSegmentId).length
+      const target = this.segmentsMap.get(currentSegmentId)?.config.maxOccupancy ?? 0
+      const pending = this.countPendingByBranch()[branch]
+      const purgeDemand = occ - target + pending
+      if (purgeDemand <= 0) return false
+    }
     const allowedIntoNext = this.allowedEntryDistance(nextId)
     if (allowedIntoNext <= EPS) return false
     t.currentSegmentId = nextId
     const enterDist = Math.min(distance, allowedIntoNext)
     t.positionFt = enterDist
+    // when leaving a hybrid pile, clear pilePlacement/runtime so generic segment movement applies
+    if (this.piles.has(currentSegmentId)) {
+      t.pilePlacement = undefined
+      t.pileRuntime = undefined
+      t.status = 'MOVING'
+    }
     return true
   }
 
   private allowedEntryDistance(segmentId: string): number {
     const segCfg = this.segmentsMap.get(segmentId)?.config
     if (!segCfg) return 0
+    // for hybrid piles (A1/B1/C1) physical acceptance is handled by pile internals
+    if (this.piles.has(segmentId)) {
+      // if pile exists, allow entry if there is any physical space (conservative stub)
+      // detailed per-zone logic implemented in pile model; for now, return Infinity to avoid hard cap
+      return Infinity
+    }
     const traysOn = this.trays.filter((t) => t.currentSegmentId === segmentId)
     const occupancy = traysOn.length
     if (segCfg.maxOccupancy !== undefined && occupancy >= segCfg.maxOccupancy) return 0
@@ -553,6 +759,12 @@ export class SimulationEngine {
   private canEnterSegment(segmentId: string, desiredEntryDist: number): boolean {
     const segCfg = this.segmentsMap.get(segmentId)?.config
     if (!segCfg) return false
+    // for hybrid piles, entering means the first upstream MDR zone must accept the tray
+    if (this.piles.has(segmentId)) {
+      // check whether upstream MDR zone 0 is free (no tray occupying zoneIndex 0)
+      const occupied = this.trays.some((t) => t.pilePlacement && t.pilePlacement.pileId === segmentId && t.pilePlacement.component === 'MDR_UPSTREAM' && t.pilePlacement.zoneIndex === 0)
+      return !occupied
+    }
     const traysOn = this.trays.filter((t) => t.currentSegmentId === segmentId)
     const occupancy = traysOn.length
     if (segCfg.maxOccupancy !== undefined && occupancy >= segCfg.maxOccupancy) return false
@@ -610,10 +822,41 @@ export class SimulationEngine {
     // initial physical piles per Milestone 5 (only populate when full A/B/C/D topology exists)
     // A1 = 24, B1 = 16, C1 = 16, D = 73
     if (this.segmentsMap.has('A1') && this.segmentsMap.has('B1') && this.segmentsMap.has('C1') && this.segmentsMap.has('D')) {
-      this.populateInitialPile('A1', 24, 'A')
-      this.populateInitialPile('B1', 16, 'B')
-      this.populateInitialPile('C1', 16, 'C')
+      // populate new hybrid piles for A1/B1/C1 using HybridAccumulationPile
+      const startId = this.totalTraysCreated + 1
+      let nextId = startId
+      const pA = this.piles.get('A1')
+      if (pA) {
+        const res = pA.initialTrays(nextId, 'A')
+        this.trays.push(...res.trays)
+        nextId = res.nextId
+      } else {
+        this.populateInitialPile('A1', 24, 'A')
+      }
+
+      const pB = this.piles.get('B1')
+      if (pB) {
+        const res = pB.initialTrays(nextId, 'B')
+        this.trays.push(...res.trays)
+        nextId = res.nextId
+      } else {
+        this.populateInitialPile('B1', 16, 'B')
+      }
+
+      const pC = this.piles.get('C1')
+      if (pC) {
+        const res = pC.initialTrays(nextId, 'C')
+        this.trays.push(...res.trays)
+        nextId = res.nextId
+      } else {
+        this.populateInitialPile('C1', 16, 'C')
+      }
+
+      // D remains legacy
       this.populateInitialPile('D', 73, 'A')
+
+      // update totalTraysCreated to reflect created trays
+      this.totalTraysCreated = nextId - 1
     }
   }
 
@@ -677,6 +920,25 @@ export class SimulationEngine {
     const totalPending = pendingBy.A + pendingBy.B + pendingBy.C
     const additionalASRSDemand = Math.max(0, globalTargetCount - globalCurrentCount - totalPending)
 
+    // pile diagnostics (Milestone 6)
+    const upstreamMdrA = this.trays.filter((t) => t.pilePlacement && t.pilePlacement.pileId === 'A1' && t.pilePlacement.component === 'MDR_UPSTREAM').length
+    const downstreamMdrA = this.trays.filter((t) => t.pilePlacement && t.pilePlacement.pileId === 'A1' && t.pilePlacement.component === 'MDR_DOWNSTREAM').length
+    const beltCountA = this.trays.filter((t) => t.pilePlacement && t.pilePlacement.pileId === 'A1' && t.pilePlacement.component === 'BELT').length
+    const upstreamMdrB = this.trays.filter((t) => t.pilePlacement && t.pilePlacement.pileId === 'B1' && t.pilePlacement.component === 'MDR_UPSTREAM').length
+    const downstreamMdrB = this.trays.filter((t) => t.pilePlacement && t.pilePlacement.pileId === 'B1' && t.pilePlacement.component === 'MDR_DOWNSTREAM').length
+    const beltCountB = this.trays.filter((t) => t.pilePlacement && t.pilePlacement.pileId === 'B1' && t.pilePlacement.component === 'BELT').length
+    const upstreamMdrC = this.trays.filter((t) => t.pilePlacement && t.pilePlacement.pileId === 'C1' && t.pilePlacement.component === 'MDR_UPSTREAM').length
+    const downstreamMdrC = this.trays.filter((t) => t.pilePlacement && t.pilePlacement.pileId === 'C1' && t.pilePlacement.component === 'MDR_DOWNSTREAM').length
+    const beltCountC = this.trays.filter((t) => t.pilePlacement && t.pilePlacement.pileId === 'C1' && t.pilePlacement.component === 'BELT').length
+
+    const beltRunningA = !(downstreamMdrA >= (this.piles.get('A1')?.config.downstreamMdrCount ?? 0) && purgeDemandA <= 0)
+    const beltRunningB = !(downstreamMdrB >= (this.piles.get('B1')?.config.downstreamMdrCount ?? 0) && purgeDemandB <= 0)
+    const beltRunningC = !(downstreamMdrC >= (this.piles.get('C1')?.config.downstreamMdrCount ?? 0) && purgeDemandC <= 0)
+
+    const pileAuthorizedExitA = purgeDemandA > 0
+    const pileAuthorizedExitB = purgeDemandB > 0
+    const pileAuthorizedExitC = purgeDemandC > 0
+
     return {
       timeSec: this.timeSec,
       trays: this.trays.map((t) => ({ ...t })),
@@ -717,6 +979,21 @@ export class SimulationEngine {
       blockedCount,
       totalTraysCreated: this.totalTraysCreated,
       materialBalanceError,
+      upstreamMdrA,
+      beltCountA,
+      downstreamMdrA,
+      beltRunningA,
+      upstreamMdrB,
+      beltCountB,
+      downstreamMdrB,
+      beltRunningB,
+      upstreamMdrC,
+      beltCountC,
+      downstreamMdrC,
+      beltRunningC,
+      pileAuthorizedExitA,
+      pileAuthorizedExitB,
+      pileAuthorizedExitC,
       totalRouteDistance,
     }
   }
