@@ -993,7 +993,11 @@ export class SimulationEngine {
 
     return {
       timeSec: this.timeSec,
-      trays: this.trays.map((t) => ({ ...t })),
+      trays: this.trays.map((t) => ({
+        ...t,
+        pilePlacement: t.pilePlacement ? { ...t.pilePlacement } : undefined,
+        pileRuntime: t.pileRuntime ? { ...t.pileRuntime } : undefined,
+      })),
       segments,
       source: sourceState,
       sources,
