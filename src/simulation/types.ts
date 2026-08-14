@@ -21,6 +21,22 @@ export interface Tray {
     transferring?: boolean
     transferRemainingSec?: number
   }
+  zonePlacement?: {
+    conveyorId: 'PRE_T' | 'T' | 'D'
+    zoneIndex: number
+  }
+}
+
+export interface ActiveSlugState {
+  source: SourceId
+  authorizedCount: number
+  releasedCount: number
+  authorizedTrayIds: number[]
+  enteredTCount: number
+  finalAuthorizedTrayId: number
+  authorizedAtSec: number
+  completedAtSec: number | null
+  status: 'ACTIVE' | 'COMPLETE'
 }
 
 export interface ConveyorSegmentConfig {
@@ -131,6 +147,18 @@ export interface SimulationState {
   pileAuthorizedExitA: boolean
   pileAuthorizedExitB: boolean
   pileAuthorizedExitC: boolean
+  slugCursor: SourceId
+  activeSlug: ActiveSlugState | null
+  lastCompletedSlug: ActiveSlugState | null
+  dEntranceAvailable: boolean
+  dFinalZoneOccupied: boolean
+  korberNextConsumptionTime: number
+  korberLastConsumedTrayId: number | null
+  zonedOccupancy: {
+    PRE_T: number
+    T: number
+    D: number
+  }
   segmentStats: SegmentStats[]
   movingCount: number
   blockedCount: number

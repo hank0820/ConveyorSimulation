@@ -1,6 +1,7 @@
 import type { Tray, ConveyorSegmentConfig, SimulationStateWithProgress, SourceConfig, SourceId, MergeState, SourceState } from './types'
 import ConveyorSegment from './ConveyorSegment'
 import HybridAccumulationPile from './HybridAccumulationPile'
+import Milestone7Simulation from './Milestone7Simulation'
 
 const INTERNAL_TICK_SECONDS = 0.1
 const EPS = 1e-9
@@ -11,6 +12,7 @@ const DEFAULT_SOURCE_CONFIGS: SourceConfig[] = [
 ]
 
 export class SimulationEngine {
+  private milestone7?: Milestone7Simulation
   private timeSec = 0
   private trays: Tray[] = []
   private segmentsMap: Map<string, ConveyorSegment>
@@ -128,14 +130,22 @@ export class SimulationEngine {
       }))
     }
 
-    this.tryInjectSources()
-
-    // initialize default runtime state (constructor creates initial legacy tray at t=0)
-    this.reset()
-    if (this.useLegacySources) this.processLegacySources()
+    if (this.segmentsMap.has('PRE_T')) {
+      const required = ['A1', 'B1', 'C1', 'PRE_T', 'T', 'D']
+      if (!required.every((id) => this.segmentsMap.has(id))) throw new Error('Milestone 7 topology requires A1, B1, C1, PRE_T, T, and D')
+      this.milestone7 = new Milestone7Simulation(segmentConfigs)
+    } else {
+      this.tryInjectSources()
+      this.reset()
+      if (this.useLegacySources) this.processLegacySources()
+    }
   }
 
   step(seconds: number) {
+    if (this.milestone7) {
+      this.milestone7.step(seconds)
+      return
+    }
     if (seconds <= 0) return
     let remaining = seconds
     while (remaining > 0) {
@@ -811,6 +821,10 @@ export class SimulationEngine {
   }
 
   reset() {
+    if (this.milestone7) {
+      this.milestone7.reset()
+      return
+    }
     this.timeSec = 0
     this.trays = []
     this.totalTraysCreated = 0
@@ -898,6 +912,7 @@ export class SimulationEngine {
   }
 
   getState(): SimulationStateWithProgress {
+    if (this.milestone7) return this.milestone7.getState()
     const segments = this.segmentsOrder.map((s) => ({ ...s }))
     const totalRouteDistance = segments.reduce((acc, s) => acc + s.lengthFt, 0)
     const segmentStats = segments.map((s) => {
@@ -1041,6 +1056,14 @@ export class SimulationEngine {
       pileAuthorizedExitA,
       pileAuthorizedExitB,
       pileAuthorizedExitC,
+      slugCursor: this.mergeState.nextPriority,
+      activeSlug: null,
+      lastCompletedSlug: null,
+      dEntranceAvailable: false,
+      dFinalZoneOccupied: false,
+      korberNextConsumptionTime: 0,
+      korberLastConsumedTrayId: null,
+      zonedOccupancy: { PRE_T: 0, T: occT, D: occD },
       totalRouteDistance,
     }
   }
