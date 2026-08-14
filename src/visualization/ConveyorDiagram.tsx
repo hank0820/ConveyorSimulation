@@ -10,12 +10,11 @@ interface Props {
 }
 
 const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
-  const width = 920
-  const height = 280
+  const width = 1120
+  const height = 330
   const padding = 20
   const branchStartX = 130
   const exchangerX = 20
-  const branchGap = 8
   const branchMaxWidth = 260
 
   const rowYs: Record<BranchId, number> = {
@@ -44,10 +43,10 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
 
   const branchTotals = {
     A: segments
-      .filter((s) => s.id === 'A1' || s.id === 'A1T')
+      .filter((s) => s.id === 'A1')
       .reduce((sum, s) => sum + s.lengthFt, 0),
     B: segments
-      .filter((s) => s.id === 'B1' || s.id === 'B1T')
+      .filter((s) => s.id === 'B1')
       .reduce((sum, s) => sum + s.lengthFt, 0),
     C: segments
       .filter((s) => s.id === 'C1')
@@ -67,19 +66,13 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
     h: number
     lengthFt: number
     pileId?: string
-    region?: 'MDR_UPSTREAM' | 'BELT' | 'MDR_DOWNSTREAM'
+    region?: 'MDR_UPSTREAM' | 'BELT' | 'MDR_DOWNSTREAM' | 'MDR'
     zoneIndex?: number
   }>()
 
   const rectHeight = 24
   const textOffset = 14
 
-  const addSegment = (id: string, x: number, row: 'A' | 'B' | 'C', len: number) => {
-    const y = rowYs[row]
-    const w = Math.max(50, Math.round(len * branchScales[row]))
-    segmentLayout.set(id, { x, y, w, h: rectHeight, lengthFt: len })
-    return x + w + branchGap
-  }
   // draw hybrid pile A1: 8 upstream MDR (2.5ft) + 23.5ft belt + 15 downstream MDR (2.5ft)
   const A1_len = segments.find((s) => s.id === 'A1')?.lengthFt ?? 81
   const A1_up = 8
@@ -123,9 +116,6 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
   // mark logical segment A1 spanning
   segmentLayout.set('A1', { x: branchStartX, y: rowYs.A, w: nextAx - branchStartX, h: rectHeight, lengthFt: A1_len })
 
-  // A1T remains transport element
-  nextAx = addSegment('A1T', nextAx + 8, 'A', segments.find((s) => s.id === 'A1T')?.lengthFt ?? 59)
-
   let nextBx = branchStartX
   const scaleB = branchScales.B
   nextBx = drawMdrBank(nextBx, 'B', 'MDR_UPSTREAM', B1_up, 2.5, scaleB)
@@ -135,8 +125,6 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
   nextBx = beltBx + beltBw + 6
   nextBx = drawMdrBank(nextBx, 'B', 'MDR_DOWNSTREAM', B1_down, 2.5, scaleB)
   segmentLayout.set('B1', { x: branchStartX, y: rowYs.B, w: nextBx - branchStartX, h: rectHeight, lengthFt: B1_len })
-  nextBx = addSegment('B1T', nextBx + 8, 'B', segments.find((s) => s.id === 'B1T')?.lengthFt ?? 44)
-
   let nextCx = branchStartX
   const scaleC = branchScales.C
   nextCx = drawMdrBank(nextCx, 'C', 'MDR_UPSTREAM', B1_up, 2.5, scaleC)
@@ -147,18 +135,32 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
   nextCx = drawMdrBank(nextCx, 'C', 'MDR_DOWNSTREAM', B1_down, 2.5, scaleC)
   segmentLayout.set('C1', { x: branchStartX, y: rowYs.C, w: nextCx - branchStartX, h: rectHeight, lengthFt: B1_len })
 
-  const tX = 620
+  const drawZonedConveyor = (id: 'PRE_T' | 'T' | 'D', x: number, y: number, count: number, totalWidth: number) => {
+    const zoneWidth = totalWidth / count
+    for (let index = 0; index < count; index++) {
+      segmentLayout.set(`${id}:MDR:${index}`, { x: x + index * zoneWidth, y, w: zoneWidth, h: 32, lengthFt: 2.5, pileId: id, region: 'MDR', zoneIndex: index })
+    }
+    segmentLayout.set(id, { x, y, w: totalWidth, h: 32, lengthFt: count * 2.5 })
+  }
+
+  const preTX = 500
+  const preTY = 100
+  drawZonedConveyor('PRE_T', preTX, preTY, 8, 96)
+  const tX = 640
   const tY = rowYs.B
-  const tW = 140
-  const tH = 32
-  segmentLayout.set('T', { x: tX, y: tY, w: tW, h: tH, lengthFt: segments.find((s) => s.id === 'T')?.lengthFt ?? 0 })
+  const tW = 144
+  drawZonedConveyor('T', tX, tY, 12, tW)
 
   const dX = tX + tW + 30
   const dY = tY
-  const dW = 140
-  segmentLayout.set('D', { x: dX, y: dY, w: dW, h: tH, lengthFt: segments.find((s) => s.id === 'D')?.lengthFt ?? 0 })
+  const dW = 282
+  drawZonedConveyor('D', dX, dY, 94, dW)
 
   const trayPositions = trays.map((t) => {
+    if (t.zonePlacement) {
+      const layout = segmentLayout.get(`${t.zonePlacement.conveyorId}:MDR:${t.zonePlacement.zoneIndex}`)
+      if (layout) return { id: t.id, cx: layout.x + layout.w / 2, cy: layout.y, segId: t.zonePlacement.conveyorId, zoneIndex: t.zonePlacement.zoneIndex }
+    }
     // if tray has pilePlacement metadata, map it to the specific visual subcomponent
     if (t.pilePlacement) {
       const pile = t.pilePlacement.pileId
@@ -228,7 +230,7 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
             y={layout.y - layout.h / 2}
             width={layout.w}
             height={layout.h}
-            fill={layout.region === 'MDR_UPSTREAM' || layout.region === 'MDR_DOWNSTREAM' ? '#c8e6c9' : layout.region === 'BELT' ? '#90caf9' : id === 'A1' || id === 'B1' || id === 'C1' ? 'none' : id === 'T' ? '#ffd54f' : id === 'D' ? '#ffe0b2' : '#e0e0e0'}
+            fill={layout.region === 'MDR_UPSTREAM' || layout.region === 'MDR_DOWNSTREAM' ? '#c8e6c9' : layout.region === 'BELT' ? '#90caf9' : layout.region === 'MDR' ? (layout.pileId === 'D' ? '#ffe0b2' : '#ffd54f') : id === 'A1' || id === 'B1' || id === 'C1' || id === 'PRE_T' || id === 'T' || id === 'D' ? 'none' : '#e0e0e0'}
             stroke="#666"
           />
           {layout.zoneIndex === undefined && (
@@ -245,28 +247,21 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
       {(() => {
         const paths: ReactElement[] = []
         const a1 = getSegmentRect('A1')
-        const a1t = getSegmentRect('A1T')
         const b1 = getSegmentRect('B1')
-        const b1t = getSegmentRect('B1T')
         const c1 = getSegmentRect('C1')
+        const preT = getSegmentRect('PRE_T')
         const t = getSegmentRect('T')
         if (a1) paths.push(
           <path key="A-exch-A1" d={`M ${exchangerX + 80} ${rowYs.A} L ${a1.x} ${rowYs.A}`} stroke="#999" fill="none" strokeWidth={2} />
         )
-        if (a1 && a1t) paths.push(
-          <path key="A1-A1T" d={`M ${a1.x + a1.w} ${rowYs.A} L ${a1t.x} ${rowYs.A}`} stroke="#999" fill="none" strokeWidth={2} />
-        )
-        if (a1t && t) paths.push(
-          <path key="A1T-T" d={branchConnector(a1t.x + a1t.w, rowYs.A, t.x, rowYs.B)} stroke="#999" fill="none" strokeWidth={2} />
+        if (a1 && preT) paths.push(
+          <path key="A1-PRE_T" d={branchConnector(a1.x + a1.w, rowYs.A, preT.x, preT.y)} stroke="#999" fill="none" strokeWidth={2} />
         )
         if (b1) paths.push(
           <path key="B-exch-B1" d={`M ${exchangerX + 80} ${rowYs.B} L ${b1.x} ${rowYs.B}`} stroke="#999" fill="none" strokeWidth={2} />
         )
-        if (b1 && b1t) paths.push(
-          <path key="B1-B1T" d={`M ${b1.x + b1.w} ${rowYs.B} L ${b1t.x} ${rowYs.B}`} stroke="#999" fill="none" strokeWidth={2} />
-        )
-        if (b1t && t) paths.push(
-          <path key="B1T-T" d={`M ${b1t.x + b1t.w} ${rowYs.B} L ${t.x} ${rowYs.B}`} stroke="#999" fill="none" strokeWidth={2} />
+        if (b1 && preT) paths.push(
+          <path key="B1-PRE_T" d={branchConnector(b1.x + b1.w, rowYs.B, preT.x, preT.y)} stroke="#999" fill="none" strokeWidth={2} />
         )
         if (c1) paths.push(
           <path key="C-exch-C1" d={`M ${exchangerX + 80} ${rowYs.C} L ${c1.x} ${rowYs.C}`} stroke="#999" fill="none" strokeWidth={2} />
@@ -274,13 +269,23 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
         if (c1 && t) paths.push(
           <path key="C1-T" d={branchConnector(c1.x + c1.w, rowYs.C, t.x, rowYs.B)} stroke="#999" fill="none" strokeWidth={2} />
         )
+        if (preT && t) paths.push(
+          <path key="PRE_T-T" d={branchConnector(preT.x + preT.w, preT.y, t.x, t.y)} stroke="#999" fill="none" strokeWidth={2} />
+        )
         return paths
       })()}
 
+      <text x={500} y={285} fontSize={11} fill="#111">
+        Slug cursor: {state.slugCursor} | Active: {state.activeSlug?.source ?? 'NONE'} | Authorized: {state.activeSlug?.authorizedCount ?? 0} | Released: {state.activeSlug?.releasedCount ?? 0} | Entered T: {state.activeSlug?.enteredTCount ?? 0}
+      </text>
+      <text x={500} y={302} fontSize={11} fill="#111">
+        D entrance: {state.dEntranceAvailable ? 'AVAILABLE' : 'BLOCKED'} | D final: {state.dFinalZoneOccupied ? 'OCCUPIED' : 'EMPTY'} | Körber: {state.korber.starved ? 'STARVED' : state.korber.ready ? 'READY' : 'WAITING'}
+      </text>
+
       {trayPositions.map((tp) => (
-        <g key={tp.id} data-tray-id={tp.id} data-segment-id={tp.segId}>
+        <g key={tp.id} data-tray-id={tp.id} data-segment-id={tp.segId} data-zone-index={tp.zoneIndex}>
           <circle cx={tp.cx} cy={tp.cy} r={8} fill="#1976d2" />
-          <text x={tp.cx} y={tp.cy + 20} fontSize={10} fill="#000" textAnchor="middle">{tp.id}</text>
+          {tp.segId !== 'D' && <text x={tp.cx} y={tp.cy + 20} fontSize={10} fill="#000" textAnchor="middle">{tp.id}</text>}
         </g>
       ))}
     </svg>
