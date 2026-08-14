@@ -20,7 +20,7 @@ const SimulationControls: FC<Props> = ({
   onStep,
   onReset,
 }) => {
-  const { trays, segmentStats, sources, mergeState, movingCount, blockedCount, totalTraysCreated, materialBalanceError } = state
+  const { trays, segmentStats, sources, movingCount, blockedCount, totalTraysCreated, materialBalanceError } = state
 
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
@@ -50,19 +50,21 @@ const SimulationControls: FC<Props> = ({
       </div>
 
       <div style={{ marginTop: 8 }}>
-        <strong>Merge Next Priority:</strong> {mergeState.nextPriority}
+        <strong>Slug Cursor:</strong> {state.slugCursor}
       </div>
 
       <div>
-        <strong>Merge Eligible:</strong> A: {mergeState.eligibleA ? 'yes' : 'no'}, B: {mergeState.eligibleB ? 'yes' : 'no'}, C: {mergeState.eligibleC ? 'yes' : 'no'}
+        <strong>Active Slug:</strong> {state.activeSlug?.source ?? 'NONE'}
+        {state.activeSlug && ` (${state.activeSlug.releasedCount}/${state.activeSlug.authorizedCount} released, ${state.activeSlug.enteredTCount} entered T)`}
       </div>
 
       <div>
-        <strong>Merge Selected:</strong> {mergeState.selectedSource}
+        <strong>D Entrance:</strong> {state.dEntranceAvailable ? 'AVAILABLE' : 'BLOCKED'}
       </div>
 
       <div>
-        <strong>Merge Transfers:</strong> A: {mergeState.cumulativeTransfersA}, B: {mergeState.cumulativeTransfersB}, C: {mergeState.cumulativeTransfersC}
+        <strong>D Final Zone:</strong> {state.dFinalZoneOccupied ? 'OCCUPIED' : 'EMPTY'};{' '}
+        <strong>Körber:</strong> {state.korber.starved ? 'STARVED' : state.korber.ready ? 'READY' : 'WAITING'}
       </div>
 
       <div style={{ marginTop: 8 }}>

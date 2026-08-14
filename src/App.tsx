@@ -6,13 +6,12 @@ import SimulationEngine from './simulation/SimulationEngine'
 import type { SimulationStateWithProgress } from './simulation/types'
 
 const SEGMENTS = [
-  { id: 'A1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'A1T', maxOccupancy: 24 },
-  { id: 'A1T', lengthFt: 59, speedFtPerMin: 120, nextSegmentId: 'T' },
-  { id: 'B1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'B1T', maxOccupancy: 16 },
-  { id: 'B1T', lengthFt: 44, speedFtPerMin: 120, nextSegmentId: 'T' },
+  { id: 'A1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 24 },
+  { id: 'B1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 16 },
   { id: 'C1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'T', maxOccupancy: 16 },
-  { id: 'T', lengthFt: 33, speedFtPerMin: 120, nextSegmentId: 'D', maxOccupancy: 12 },
-  { id: 'D', lengthFt: 235, speedFtPerMin: 120, maxOccupancy: 73 },
+  { id: 'PRE_T', lengthFt: 20, speedFtPerMin: 120, nextSegmentId: 'T', maxOccupancy: 8 },
+  { id: 'T', lengthFt: 30, speedFtPerMin: 120, nextSegmentId: 'D', maxOccupancy: 12 },
+  { id: 'D', lengthFt: 235, speedFtPerMin: 120, maxOccupancy: 94 },
 ]
 
 function App() {
@@ -20,8 +19,6 @@ function App() {
   const [state, setState] = useState<SimulationStateWithProgress>(() => engineRef.current.getState())
   const [playing, setPlaying] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
-
-  // animation loop
 
   // animation loop
   useEffect(() => {

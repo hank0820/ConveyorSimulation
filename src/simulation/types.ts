@@ -9,6 +9,34 @@ export interface Tray {
   status: TrayStatus
   createdAtSec: number
   originSourceId: SourceId
+  // optional physical placement inside a logical hybrid pile
+  pilePlacement?: {
+    pileId: string // e.g. 'A1','B1','C1'
+    component: 'MDR_UPSTREAM' | 'BELT' | 'MDR_DOWNSTREAM'
+    zoneIndex?: number // for MDR zones, 0-based from upstream
+    beltPosFt?: number // for belt trays: position along belt (0..beltLength)
+  }
+  // runtime state used by hybrid pile physics
+  pileRuntime?: {
+    transferring?: boolean
+    transferRemainingSec?: number
+  }
+  zonePlacement?: {
+    conveyorId: 'PRE_T' | 'T' | 'D'
+    zoneIndex: number
+  }
+}
+
+export interface ActiveSlugState {
+  source: SourceId
+  authorizedCount: number
+  releasedCount: number
+  authorizedTrayIds: number[]
+  enteredTCount: number
+  finalAuthorizedTrayId: number
+  authorizedAtSec: number
+  completedAtSec: number | null
+  status: 'ACTIVE' | 'COMPLETE'
 }
 
 export interface ConveyorSegmentConfig {
@@ -103,10 +131,42 @@ export interface SimulationState {
   asrsAssignedA: number
   asrsAssignedB: number
   asrsAssignedC: number
+  // Milestone 6 hybrid pile diagnostics
+  upstreamMdrA: number
+  beltCountA: number
+  downstreamMdrA: number
+  beltRunningA: boolean
+  upstreamMdrB: number
+  beltCountB: number
+  downstreamMdrB: number
+  beltRunningB: boolean
+  upstreamMdrC: number
+  beltCountC: number
+  downstreamMdrC: number
+  beltRunningC: boolean
+  pileAuthorizedExitA: boolean
+  pileAuthorizedExitB: boolean
+  pileAuthorizedExitC: boolean
+  slugCursor: SourceId
+  activeSlug: ActiveSlugState | null
+  lastCompletedSlug: ActiveSlugState | null
+  dEntranceAvailable: boolean
+  dFinalZoneOccupied: boolean
+  korberNextConsumptionTime: number
+  korberLastConsumedTrayId: number | null
+  zonedOccupancy: {
+    PRE_T: number
+    T: number
+    D: number
+  }
   segmentStats: SegmentStats[]
   movingCount: number
   blockedCount: number
+  // Includes initial inventory created during reset and runtime exchanger releases.
   totalTraysCreated: number
+  createdTrayCount: number
+  physicalTrayCount: number
+  consumedTrayCount: number
   materialBalanceError: number
 }
 
