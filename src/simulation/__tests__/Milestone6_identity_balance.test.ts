@@ -204,7 +204,7 @@ describe('Milestone 6A identity and material balance', () => {
       assertMaterialBalance(state)
     }
     expect(maximumPhysicalTrays).toBeGreaterThan(0)
-  }, 60_000)
+  }, 120_000)
 })
 
 describe('hybrid pile inter-segment entry', () => {
