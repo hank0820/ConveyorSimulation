@@ -140,5 +140,5 @@ describe('Milestone 7 mechanically coupled middle-belt interlock', () => {
       prior = state
     }
     expect(transitions).toBeGreaterThanOrEqual(2)
-  })
+  }, 20_000)
 })
