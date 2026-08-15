@@ -85,6 +85,15 @@ const SimulationControls: FC<Props> = ({
         {state.beltDiagnostics.map((belt) => `${belt.pileId} ${belt.beltRunning ? 'RUNNING' : 'STOPPED'}`).join(' · ')}
       </div>
 
+      {state.returnSystem.enabled && (
+        <div style={{ marginTop: 8 }}>
+          <strong>Return Loop:</strong>{' '}
+          Körber processed {state.returnSystem.korberProcessedCount}; held {state.returnSystem.korberHeldTrayId ?? 'none'};{' '}
+          purge {state.returnSystem.activePurgeBatch ? `${state.returnSystem.activePurgeBatch.enteredPurgeCount}/6` : 'idle'};{' '}
+          sorter {state.returnSystem.sorterCursor}; returned {state.returnSystem.returnedToAsrsCount}
+        </div>
+      )}
+
       <div style={{ marginTop: 8 }}>
         <button onClick={onPlayPause}>{playing ? 'Pause' : 'Play'}</button>
         <button onClick={onStep} style={{ marginLeft: 8 }}>Step +1 sec</button>

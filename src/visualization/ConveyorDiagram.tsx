@@ -1,5 +1,5 @@
 import type { FC, ReactElement } from 'react'
-import type { ConveyorSegmentConfig, Tray, SimulationStateWithProgress } from '../simulation/types'
+import type { ConveyorSegmentConfig, Tray, SimulationStateWithProgress, ZonedConveyorId } from '../simulation/types'
 
 type BranchId = 'A' | 'B' | 'C'
 
@@ -11,7 +11,7 @@ interface Props {
 
 const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
   const width = 1120
-  const height = 330
+  const height = state.returnSystem.enabled ? 520 : 330
   const padding = 20
   const branchStartX = 130
   const exchangerX = 20
@@ -135,7 +135,7 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
   nextCx = drawMdrBank(nextCx, 'C', 'MDR_DOWNSTREAM', B1_down, 2.5, scaleC)
   segmentLayout.set('C1', { x: branchStartX, y: rowYs.C, w: nextCx - branchStartX, h: rectHeight, lengthFt: B1_len })
 
-  const drawZonedConveyor = (id: 'PRE_T' | 'T' | 'D', x: number, y: number, count: number, totalWidth: number) => {
+  const drawZonedConveyor = (id: ZonedConveyorId, x: number, y: number, count: number, totalWidth: number) => {
     const zoneWidth = totalWidth / count
     for (let index = 0; index < count; index++) {
       segmentLayout.set(`${id}:MDR:${index}`, { x: x + index * zoneWidth, y, w: zoneWidth, h: 32, lengthFt: 2.5, pileId: id, region: 'MDR', zoneIndex: index })
@@ -156,11 +156,22 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
   const dW = 282
   drawZonedConveyor('D', dX, dY, 94, dW)
 
+  if (state.returnSystem.enabled) {
+    drawZonedConveyor('PURGE', 620, 290, 6, 120)
+    drawZonedConveyor('E', 120, 350, 35, 350)
+    drawZonedConveyor('X', 500, 350, 5, 100)
+    drawZonedConveyor('C2', 770, 290, 29, 300)
+    drawZonedConveyor('S', 650, 390, 8, 120)
+    drawZonedConveyor('B2', 800, 370, 29, 290)
+    drawZonedConveyor('A2', 800, 450, 36, 290)
+  }
+
   const trayPositions = trays.map((t) => {
     if (t.zonePlacement) {
       const layout = segmentLayout.get(`${t.zonePlacement.conveyorId}:MDR:${t.zonePlacement.zoneIndex}`)
       if (layout) return { id: t.id, cx: layout.x + layout.w / 2, cy: layout.y, segId: t.zonePlacement.conveyorId, zoneIndex: t.zonePlacement.zoneIndex }
     }
+    if (t.korberHeld) return { id: t.id, cx: 90, cy: 350, segId: 'KORBER' }
     // if tray has pilePlacement metadata, map it to the specific visual subcomponent
     if (t.pilePlacement) {
       const pile = t.pilePlacement.pileId
@@ -222,6 +233,7 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
           key={id}
           data-zone-id={layout.zoneIndex !== undefined ? id : undefined}
           data-pile-id={layout.pileId}
+          data-conveyor-id={layout.region === 'MDR' ? layout.pileId : undefined}
           data-region={layout.region}
           data-zone-index={layout.zoneIndex}
         >
@@ -282,11 +294,32 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
         D entrance: {state.dEntranceAvailable ? 'AVAILABLE' : 'BLOCKED'} | D final: {state.dFinalZoneOccupied ? 'OCCUPIED' : 'EMPTY'} | Körber: {state.korber.starved ? 'STARVED' : state.korber.ready ? 'READY' : 'WAITING'}
       </text>
 
+      {state.returnSystem.enabled && (
+        <g>
+          <path d="M 784 140 L 784 290 L 620 290" stroke="#777" fill="none" />
+          <path d="M 1096 140 L 1110 140 L 1110 250 L 90 250 L 90 334" stroke="#777" fill="none" />
+          <path d="M 106 350 L 120 350" stroke="#777" fill="none" />
+          <path d="M 470 350 L 500 350 M 740 290 L 480 290 L 480 350" stroke="#777" fill="none" />
+          <path d="M 600 350 L 630 350 L 630 290 L 770 290 M 630 350 L 630 390 L 650 390" stroke="#777" fill="none" />
+          <path d="M 770 390 L 785 390 L 785 370 L 800 370 M 785 390 L 785 450 L 800 450" stroke="#777" fill="none" />
+          <rect x={70} y={334} width={36} height={32} fill="#ce93d8" stroke="#6a1b9a" />
+          <text x={88} y={329} fontSize={10} textAnchor="middle">Körber</text>
+          <text x={620} y={337} fontSize={10}>RETURN SORTER</text>
+          <text x={500} y={485} fontSize={11}>
+            Purge: {state.returnSystem.activePurgeBatch?.enteredPurgeCount ?? 0}/6 | Held: {state.returnSystem.korberHeldTrayId ?? 'NONE'} | Sorter: {state.returnSystem.sorterCursor} | Returned: {state.returnSystem.returnedToAsrsCount}
+          </text>
+        </g>
+      )}
+
       {trayPositions.map((tp) => (
-        <g key={tp.id} data-tray-id={tp.id} data-segment-id={tp.segId} data-zone-index={tp.zoneIndex}>
-          <circle cx={tp.cx} cy={tp.cy} r={8} fill="#1976d2" />
+        (() => {
+          const tray = trays.find((candidate) => candidate.id === tp.id)!
+          const destinationColor = tray.returnDestination === 'A2' ? '#c62828' : tray.returnDestination === 'B2' ? '#6a1b9a' : tray.returnDestination === 'C2' ? '#2e7d32' : '#333'
+          return <g key={tp.id} data-tray-id={tp.id} data-segment-id={tp.segId} data-zone-index={tp.zoneIndex} data-load-state={tray.loadState ?? 'EMPTY'} data-return-destination={tray.returnDestination} data-purge-member={tray.purgeMember || undefined}>
+          <circle cx={tp.cx} cy={tp.cy} r={8} fill={tray.korberHeld ? '#ab47bc' : tray.loadState === 'FULL' ? '#ef6c00' : '#1976d2'} stroke={destinationColor} strokeWidth={tray.returnDestination ? 2 : 0} />
           {tp.segId !== 'D' && <text x={tp.cx} y={tp.cy + 20} fontSize={10} fill="#000" textAnchor="middle">{tp.id}</text>}
         </g>
+        })()
       ))}
     </svg>
   )
