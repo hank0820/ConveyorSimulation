@@ -1056,6 +1056,7 @@ export class SimulationEngine {
       pileAuthorizedExitA,
       pileAuthorizedExitB,
       pileAuthorizedExitC,
+      beltDiagnostics: [],
       slugCursor: this.mergeState.nextPriority,
       activeSlug: null,
       lastCompletedSlug: null,
