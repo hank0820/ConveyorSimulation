@@ -12,6 +12,13 @@ const SEGMENTS = [
   { id: 'PRE_T', lengthFt: 20, speedFtPerMin: 120, nextSegmentId: 'T', maxOccupancy: 8 },
   { id: 'T', lengthFt: 30, speedFtPerMin: 120, nextSegmentId: 'D', maxOccupancy: 12 },
   { id: 'D', lengthFt: 235, speedFtPerMin: 120, maxOccupancy: 94 },
+  { id: 'PURGE', lengthFt: 15, speedFtPerMin: 120, nextSegmentId: 'X', maxOccupancy: 6 },
+  { id: 'E', lengthFt: 87.5, speedFtPerMin: 120, nextSegmentId: 'X', maxOccupancy: 35 },
+  { id: 'X', lengthFt: 12.5, speedFtPerMin: 120, maxOccupancy: 5 },
+  { id: 'S', lengthFt: 20, speedFtPerMin: 120, maxOccupancy: 8 },
+  { id: 'A2', lengthFt: 90, speedFtPerMin: 120, maxOccupancy: 36 },
+  { id: 'B2', lengthFt: 72.5, speedFtPerMin: 120, maxOccupancy: 29 },
+  { id: 'C2', lengthFt: 72.5, speedFtPerMin: 120, maxOccupancy: 29 },
 ]
 
 function App() {

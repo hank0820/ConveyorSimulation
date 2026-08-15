@@ -5,6 +5,9 @@ import type {
   ConveyorSegmentConfig,
   MergeState,
   Mission,
+  PurgeBatchState,
+  ReturnDestination,
+  ReturnedTrayRecord,
   SimulationStateWithProgress,
   SourceId,
   SourceState,
@@ -17,8 +20,10 @@ const TRAY_LENGTH_FT = 2
 const SPEED_FT_PER_SEC = 2
 const ZONE_TRANSFER_SEC = ZONE_LENGTH_FT / SPEED_FT_PER_SEC
 const KORBER_INTERVAL_SEC = 3600 / 1050
-const ZONE_COUNTS = { PRE_T: 8, T: 12, D: 94 } as const
+const ZONE_COUNTS = { PRE_T: 8, T: 12, D: 94, PURGE: 6, E: 35, X: 5, S: 8, A2: 36, B2: 29, C2: 29 } as const
 type ZonedId = keyof typeof ZONE_COUNTS
+const RETURN_IDS = ['PURGE', 'E', 'X', 'S', 'A2', 'B2', 'C2'] as const
+const RETURN_DESTINATIONS: ReturnDestination[] = ['A2', 'B2', 'C2']
 
 const SOURCE_STATES: SourceState[] = (['A', 'B', 'C'] as SourceId[]).map((id) => ({
   id,
@@ -54,9 +59,21 @@ export default class Milestone7Simulation {
   private lastConsumedTrayId: number | null = null
   private cumulativeTransfers: Record<SourceId, number> = { A: 0, B: 0, C: 0 }
   private beltDiagnostics = new Map<string, BeltDiagnostic>()
+  private returnEnabled: boolean
+  private korberProcessedCount = 0
+  private returnedHistory: ReturnedTrayRecord[] = []
+  private sorterCursor: ReturnDestination = 'A2'
+  private sorterSelectedDestination: ReturnDestination | null = null
+  private sorterBlockedReason: string | null = null
+  private activePurgeBatch: PurgeBatchState | null = null
+  private lastCompletedPurgeBatch: PurgeBatchState | null = null
+  private returnAssignments: Record<ReturnDestination, { EMPTY: number; FULL: number }> = { A2: { EMPTY: 0, FULL: 0 }, B2: { EMPTY: 0, FULL: 0 }, C2: { EMPTY: 0, FULL: 0 } }
+  private returnMergeCounts = { eToXFull: 0, purgeToXEmpty: 0, blockedE: 0, blockedPurge: 0 }
+  private exchangerAcceptanceTimes: Record<ReturnDestination, number[]> = { A2: [], B2: [], C2: [] }
 
   constructor(segments: ConveyorSegmentConfig[]) {
     this.segments = segments
+    this.returnEnabled = RETURN_IDS.every((id) => segments.some((segment) => segment.id === id))
     this.piles.set('A1', new HybridAccumulationPile({ pileId: 'A1', totalLengthFt: 81, upstreamMdrCount: 8, downstreamMdrCount: 15, beltLengthFt: 23.5, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
     this.piles.set('B1', new HybridAccumulationPile({ pileId: 'B1', totalLengthFt: 81, upstreamMdrCount: 8, downstreamMdrCount: 7, beltLengthFt: 43.5, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
     this.piles.set('C1', new HybridAccumulationPile({ pileId: 'C1', totalLengthFt: 81, upstreamMdrCount: 8, downstreamMdrCount: 7, beltLengthFt: 43.5, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
@@ -82,6 +99,16 @@ export default class Milestone7Simulation {
     this.lastConsumedTrayId = null
     this.cumulativeTransfers = { A: 0, B: 0, C: 0 }
     this.beltDiagnostics.clear()
+    this.korberProcessedCount = 0
+    this.returnedHistory = []
+    this.sorterCursor = 'A2'
+    this.sorterSelectedDestination = null
+    this.sorterBlockedReason = null
+    this.activePurgeBatch = null
+    this.lastCompletedPurgeBatch = null
+    this.returnAssignments = { A2: { EMPTY: 0, FULL: 0 }, B2: { EMPTY: 0, FULL: 0 }, C2: { EMPTY: 0, FULL: 0 } }
+    this.returnMergeCounts = { eToXFull: 0, purgeToXEmpty: 0, blockedE: 0, blockedPurge: 0 }
+    this.exchangerAcceptanceTimes = { A2: [], B2: [], C2: [] }
 
     let nextId = 1
     for (const source of ['A', 'B', 'C'] as SourceId[]) {
@@ -93,6 +120,7 @@ export default class Milestone7Simulation {
     for (let zoneIndex = 0; zoneIndex < ZONE_COUNTS.D; zoneIndex++) {
       this.trays.push(this.createZonedTray('D', zoneIndex, 'A'))
     }
+    for (const tray of this.trays) tray.loadState = 'EMPTY'
   }
 
   step(seconds: number) {
@@ -109,7 +137,10 @@ export default class Milestone7Simulation {
       this.processPiles(delta)
       this.authorizeSlugIfPossible()
       this.releaseActivePileTray()
+      this.authorizePurgeIfNeeded()
       this.processZonedBoundaries()
+      this.processReturnBoundaries()
+      this.processExchangerSinks()
       this.attemptExchangerReleases()
     }
   }
@@ -123,6 +154,7 @@ export default class Milestone7Simulation {
       status: 'BLOCKED',
       createdAtSec: this.timeSec,
       originSourceId: origin,
+      loadState: 'EMPTY',
       zonePlacement: { conveyorId, zoneIndex },
     }
   }
@@ -136,7 +168,10 @@ export default class Milestone7Simulation {
   }
 
   private processZonedConveyors(delta: number) {
-    for (const conveyorId of ['PRE_T', 'T', 'D'] as ZonedId[]) {
+    const ids: ZonedId[] = this.returnEnabled
+      ? ['PRE_T', 'T', 'D', 'PURGE', 'E', 'X', 'S', 'A2', 'B2', 'C2']
+      : ['PRE_T', 'T', 'D']
+    for (const conveyorId of ids) {
       let residualElapsedSec = 0
       for (const tray of this.trays) {
         if (tray.zonePlacement?.conveyorId !== conveyorId || !tray.pileRuntime?.transferRemainingSec) continue
@@ -165,7 +200,112 @@ export default class Milestone7Simulation {
       this.recordEnteredT(preTFinal)
     }
     const tFinal = this.zonedOccupancy('T')[ZONE_COUNTS.T - 1]
-    if (tFinal && !this.zonedOccupancy('D')[0]) this.moveToZonedEntrance(tFinal, 'D')
+    if (tFinal) {
+      const ownsPurge = Boolean(this.activePurgeBatch?.authorizedTrayIds.includes(tFinal.id))
+      if (ownsPurge) {
+        if (!this.zonedOccupancy('PURGE')[0]) {
+          this.moveToZonedEntrance(tFinal, 'PURGE')
+          tFinal.purgeMember = true
+          this.activePurgeBatch!.divertedCount += 1
+          this.activePurgeBatch!.enteredPurgeCount += 1
+          if (this.activePurgeBatch!.enteredPurgeCount === this.activePurgeBatch!.authorizedCount) {
+            this.activePurgeBatch!.status = 'COMPLETE'
+            this.activePurgeBatch!.completedAtSec = this.timeSec
+            this.lastCompletedPurgeBatch = { ...this.activePurgeBatch!, authorizedTrayIds: [...this.activePurgeBatch!.authorizedTrayIds] }
+            this.activePurgeBatch = null
+          }
+        }
+      } else if (!this.activePurgeBatch && !this.zonedOccupancy('D')[0]) {
+        this.moveToZonedEntrance(tFinal, 'D')
+      }
+    }
+  }
+
+  private authorizePurgeIfNeeded() {
+    if (!this.returnEnabled || this.activePurgeBatch) return
+    const t = this.zonedOccupancy('T')
+    const dBlocked = Boolean(this.zonedOccupancy('D')[0])
+    if (!dBlocked || t.filter(Boolean).length !== ZONE_COUNTS.T || this.zonedOccupancy('PURGE')[0]) return
+    const selected = t.filter((tray): tray is Tray => Boolean(tray && (tray.loadState ?? 'EMPTY') === 'EMPTY'))
+      .sort((a, b) => b.zonePlacement!.zoneIndex - a.zonePlacement!.zoneIndex)
+      .slice(0, 6)
+    if (selected.length !== 6) return
+    this.activePurgeBatch = {
+      authorizedTrayIds: selected.map((tray) => tray.id), authorizedCount: 6,
+      divertedCount: 0, enteredPurgeCount: 0, authorizedAtSec: this.timeSec,
+      completedAtSec: null, status: 'ACTIVE',
+    }
+    for (const tray of selected) tray.purgeMember = true
+  }
+
+  private processReturnBoundaries() {
+    if (!this.returnEnabled) return
+    const xOpen = !this.zonedOccupancy('X')[0]
+    const eReady = this.zonedOccupancy('E')[ZONE_COUNTS.E - 1]
+    const purgeReady = this.zonedOccupancy('PURGE')[ZONE_COUNTS.PURGE - 1]
+    if (xOpen && eReady) {
+      this.moveToZonedEntrance(eReady, 'X')
+      this.returnMergeCounts.eToXFull += 1
+    } else if (xOpen && purgeReady) {
+      this.moveToZonedEntrance(purgeReady, 'X')
+      this.returnMergeCounts.purgeToXEmpty += 1
+    } else if (!xOpen) {
+      if (eReady) this.returnMergeCounts.blockedE += 1
+      if (purgeReady) this.returnMergeCounts.blockedPurge += 1
+    }
+
+    const xFinal = this.zonedOccupancy('X')[ZONE_COUNTS.X - 1]
+    this.sorterSelectedDestination = xFinal?.returnDestination ?? null
+    this.sorterBlockedReason = null
+    if (xFinal) {
+      let destination = xFinal.returnDestination
+      if (!destination) destination = this.selectReturnDestination()
+      if (destination) {
+        const direct = destination === 'C2'
+        const destinationOpen = !this.zonedOccupancy(destination)[0]
+        const pathOpen = direct ? destinationOpen : destinationOpen && !this.zonedOccupancy('S')[0]
+        if (pathOpen) {
+          xFinal.returnDestination = destination
+          this.returnAssignments[destination][xFinal.loadState ?? 'EMPTY'] += 1
+          this.moveToZonedEntrance(xFinal, direct ? 'C2' : 'S')
+          this.sorterCursor = RETURN_DESTINATIONS[(RETURN_DESTINATIONS.indexOf(destination) + 1) % RETURN_DESTINATIONS.length]
+          this.sorterSelectedDestination = destination
+        } else {
+          this.sorterBlockedReason = direct ? 'C2_ENTRANCE_BLOCKED' : 'S_OR_DESTINATION_ENTRANCE_BLOCKED'
+        }
+      } else {
+        this.sorterBlockedReason = 'NO_DESTINATION_AVAILABLE'
+      }
+    }
+
+    const sFinal = this.zonedOccupancy('S')[ZONE_COUNTS.S - 1]
+    if (sFinal?.returnDestination && !this.zonedOccupancy(sFinal.returnDestination)[0]) {
+      this.moveToZonedEntrance(sFinal, sFinal.returnDestination)
+    }
+  }
+
+  private selectReturnDestination(): ReturnDestination | undefined {
+    const start = RETURN_DESTINATIONS.indexOf(this.sorterCursor)
+    for (let offset = 0; offset < RETURN_DESTINATIONS.length; offset++) {
+      const destination = RETURN_DESTINATIONS[(start + offset) % RETURN_DESTINATIONS.length]
+      const destinationOpen = !this.zonedOccupancy(destination)[0]
+      const pathOpen = destination === 'C2' ? destinationOpen : destinationOpen && !this.zonedOccupancy('S')[0]
+      if (pathOpen) return destination
+    }
+    return undefined
+  }
+
+  private processExchangerSinks() {
+    if (!this.returnEnabled) return
+    for (const destination of RETURN_DESTINATIONS) {
+      const final = this.zonedOccupancy(destination)[ZONE_COUNTS[destination] - 1]
+      const times = this.exchangerAcceptanceTimes[destination]
+      const last = times.at(-1) ?? -Infinity
+      if (!final || this.timeSec < last + 8 - EPS) continue
+      this.trays.splice(this.trays.indexOf(final), 1)
+      times.push(this.timeSec)
+      this.returnedHistory.push({ trayId: final.id, loadState: final.loadState ?? 'EMPTY', destination, acceptedAtSec: this.timeSec })
+    }
   }
 
   private moveToZonedEntrance(tray: Tray, conveyorId: ZonedId) {
@@ -346,6 +486,31 @@ export default class Milestone7Simulation {
   }
 
   private processKorber() {
+    if (this.returnEnabled) {
+      const held = this.trays.find((tray) => tray.korberHeld)
+      if (held) {
+        if (!this.zonedOccupancy('E')[0]) {
+          held.korberHeld = false
+          this.moveToZonedEntrance(held, 'E')
+          this.nextConsumptionTime = this.timeSec + KORBER_INTERVAL_SEC
+        }
+        return
+      }
+      if (this.timeSec + EPS < this.nextConsumptionTime) return
+      const finalTray = this.zonedOccupancy('D')[ZONE_COUNTS.D - 1]
+      if (!finalTray) {
+        this.korberStarved = true
+        return
+      }
+      finalTray.zonePlacement = undefined
+      finalTray.pileRuntime = undefined
+      finalTray.korberHeld = true
+      finalTray.loadState = 'FULL'
+      finalTray.status = 'BLOCKED'
+      this.korberProcessedCount += 1
+      this.korberStarved = false
+      return
+    }
     const finalTray = this.zonedOccupancy('D')[ZONE_COUNTS.D - 1]
     const due = this.timeSec + EPS >= this.nextConsumptionTime
     if (!due && !this.korberStarved) return
@@ -385,7 +550,7 @@ export default class Milestone7Simulation {
       const pileId = `${source}1`
       const occupied = this.trays.some((tray) => tray.pilePlacement?.pileId === pileId && tray.pilePlacement.component === 'MDR_UPSTREAM' && tray.pilePlacement.zoneIndex === 0)
       if (occupied) continue
-      const tray: Tray = { id: ++this.totalTraysCreated, currentSegmentId: pileId, positionFt: ZONE_LENGTH_FT / 2, status: 'BLOCKED', createdAtSec: this.timeSec, originSourceId: source, pilePlacement: { pileId, component: 'MDR_UPSTREAM', zoneIndex: 0 } }
+      const tray: Tray = { id: ++this.totalTraysCreated, currentSegmentId: pileId, positionFt: ZONE_LENGTH_FT / 2, status: 'BLOCKED', createdAtSec: this.timeSec, originSourceId: source, loadState: 'EMPTY', pilePlacement: { pileId, component: 'MDR_UPSTREAM', zoneIndex: 0 } }
       this.trays.push(tray)
       mission.state = 'RELEASED'
       this.asrsLastRelease[source] = this.timeSec
@@ -419,11 +584,16 @@ export default class Milestone7Simulation {
       return { pileId, beltRunning: exitAvailable, beltExitAvailable: exitAvailable, beltBlockedReason: exitAvailable ? null : 'DOWNSTREAM_MDR_ENTRANCE_OCCUPIED', beltTrayCount: belt.length, leadingBeltTrayId: leading?.id ?? null, leadingBeltTrayPositionFt: leading?.pilePlacement?.beltPosFt ?? null }
     })()
     const beltDiagnostics = (['A1', 'B1', 'C1'] as const).map(beltDiagnostic)
+    const returnAvailability = Object.fromEntries(RETURN_DESTINATIONS.map((destination) => [destination, !this.zonedOccupancy(destination)[0]])) as Record<ReturnDestination, boolean>
+    const sHead = this.returnEnabled ? this.zonedOccupancy('S')[ZONE_COUNTS.S - 1] : null
+    const returnConveyorOccupancy = Object.fromEntries(RETURN_IDS.map((id) => [id, this.returnEnabled ? this.zonedOccupancy(id).filter(Boolean).length : 0])) as Record<(typeof RETURN_IDS)[number], number>
+    const returnedToAsrsCount = this.returnedHistory.length
+    const materialSinkCount = this.returnEnabled ? returnedToAsrsCount : this.consumedCount
     return {
       timeSec: this.timeSec,
       trays: this.trays.map((tray) => ({ ...tray, pilePlacement: tray.pilePlacement ? { ...tray.pilePlacement } : undefined, zonePlacement: tray.zonePlacement ? { ...tray.zonePlacement } : undefined, pileRuntime: tray.pileRuntime ? { ...tray.pileRuntime } : undefined })),
       segments: this.segments.map((segment) => ({ ...segment })), sources: this.sources.map((source) => ({ ...source })), source: { ...this.sources[0] }, mergeState,
-      korber: { lastConsumptionTime: this.consumedCount ? this.nextConsumptionTime - KORBER_INTERVAL_SEC : null, totalConsumed: this.consumedCount, ready: this.timeSec + EPS >= this.nextConsumptionTime || this.korberStarved, starved: this.korberStarved },
+      korber: { lastConsumptionTime: this.returnEnabled ? (this.korberProcessedCount ? this.timeSec : null) : (this.consumedCount ? this.nextConsumptionTime - KORBER_INTERVAL_SEC : null), totalConsumed: this.returnEnabled ? this.korberProcessedCount : this.consumedCount, ready: this.timeSec + EPS >= this.nextConsumptionTime || this.korberStarved, starved: this.korberStarved },
       missions: this.missions.map((mission) => ({ ...mission })), pendingA: pending('A'), pendingB: pending('B'), pendingC: pending('C'), retrievingA: retrieving('A'), retrievingB: retrieving('B'), retrievingC: retrieving('C'), readyA: ready('A'), readyB: ready('B'), readyC: ready('C'),
       additionalASRSDemand: Math.max(0, 150 - physical - pending('A') - pending('B') - pending('C')), globalTargetCount: 150, globalCurrentCount: physical, transportInventory: this.zonedOccupancy('PRE_T').filter(Boolean).length + this.zonedOccupancy('T').filter(Boolean).length, physicalPreKorberInventory: physical,
       purgeDemandA: 0, purgeDemandB: 0, purgeDemandC: 0, asrsNextAssign: this.asrsNextAssign, asrsAssignedA: this.asrsAssigned.A, asrsAssignedB: this.asrsAssigned.B, asrsAssignedC: this.asrsAssigned.C,
@@ -432,8 +602,27 @@ export default class Milestone7Simulation {
       upstreamMdrC: pileCount('C', 'MDR_UPSTREAM'), beltCountC: pileCount('C', 'BELT'), downstreamMdrC: pileCount('C', 'MDR_DOWNSTREAM'), beltRunningC: beltDiagnostics[2].beltRunning,
       pileAuthorizedExitA: this.activeSlug?.source === 'A', pileAuthorizedExitB: this.activeSlug?.source === 'B', pileAuthorizedExitC: this.activeSlug?.source === 'C',
       beltDiagnostics,
+      returnSystem: {
+        enabled: this.returnEnabled,
+        korberProcessedCount: this.korberProcessedCount,
+        korberHeldTrayId: this.trays.find((tray) => tray.korberHeld)?.id ?? null,
+        returnedToAsrsCount,
+        returnedHistory: this.returnedHistory.map((record) => ({ ...record })),
+        purgeTriggerReady: this.returnEnabled && this.zonedOccupancy('T').filter(Boolean).length === ZONE_COUNTS.T && Boolean(this.zonedOccupancy('D')[0]) && !this.activePurgeBatch,
+        activePurgeBatch: this.activePurgeBatch ? { ...this.activePurgeBatch, authorizedTrayIds: [...this.activePurgeBatch.authorizedTrayIds] } : null,
+        lastCompletedPurgeBatch: this.lastCompletedPurgeBatch ? { ...this.lastCompletedPurgeBatch, authorizedTrayIds: [...this.lastCompletedPurgeBatch.authorizedTrayIds] } : null,
+        sorterCursor: this.sorterCursor,
+        sorterSelectedDestination: this.sorterSelectedDestination,
+        sorterAvailability: returnAvailability,
+        sorterBlockedReason: this.sorterBlockedReason,
+        sHeadTrayDestination: sHead?.returnDestination ?? null,
+        assignments: { A2: { ...this.returnAssignments.A2 }, B2: { ...this.returnAssignments.B2 }, C2: { ...this.returnAssignments.C2 } },
+        mergeCounts: { ...this.returnMergeCounts },
+        exchangerAcceptanceTimes: { A2: [...this.exchangerAcceptanceTimes.A2], B2: [...this.exchangerAcceptanceTimes.B2], C2: [...this.exchangerAcceptanceTimes.C2] },
+        conveyorOccupancy: returnConveyorOccupancy,
+      },
       segmentStats, movingCount: this.trays.filter((tray) => tray.status === 'MOVING').length, blockedCount: this.trays.filter((tray) => tray.status === 'BLOCKED').length,
-      totalTraysCreated: this.totalTraysCreated, createdTrayCount: this.totalTraysCreated, physicalTrayCount: physical, consumedTrayCount: this.consumedCount, materialBalanceError: this.totalTraysCreated - physical - this.consumedCount,
+      totalTraysCreated: this.totalTraysCreated, createdTrayCount: this.totalTraysCreated, physicalTrayCount: physical, consumedTrayCount: this.returnEnabled ? 0 : this.consumedCount, materialBalanceError: this.totalTraysCreated - physical - materialSinkCount,
       slugCursor: this.slugCursor, activeSlug: this.activeSlug ? { ...this.activeSlug, authorizedTrayIds: [...this.activeSlug.authorizedTrayIds] } : null, lastCompletedSlug: this.lastCompletedSlug ? { ...this.lastCompletedSlug, authorizedTrayIds: [...this.lastCompletedSlug.authorizedTrayIds] } : null,
       dEntranceAvailable: this.isDEntranceAvailable(), dFinalZoneOccupied: dFinal, korberNextConsumptionTime: this.nextConsumptionTime, korberLastConsumedTrayId: this.lastConsumedTrayId,
       zonedOccupancy: { PRE_T: this.zonedOccupancy('PRE_T').filter(Boolean).length, T: this.zonedOccupancy('T').filter(Boolean).length, D: this.zonedOccupancy('D').filter(Boolean).length },

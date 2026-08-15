@@ -13,6 +13,17 @@ const SEGMENTS = [
   { id: 'D', lengthFt: 235, speedFtPerMin: 120, maxOccupancy: 94 },
 ]
 
+const RETURN_SEGMENTS = [
+  ...SEGMENTS,
+  { id: 'PURGE', lengthFt: 15, speedFtPerMin: 120, nextSegmentId: 'X', maxOccupancy: 6 },
+  { id: 'E', lengthFt: 87.5, speedFtPerMin: 120, nextSegmentId: 'X', maxOccupancy: 35 },
+  { id: 'X', lengthFt: 12.5, speedFtPerMin: 120, maxOccupancy: 5 },
+  { id: 'S', lengthFt: 20, speedFtPerMin: 120, maxOccupancy: 8 },
+  { id: 'A2', lengthFt: 90, speedFtPerMin: 120, maxOccupancy: 36 },
+  { id: 'B2', lengthFt: 72.5, speedFtPerMin: 120, maxOccupancy: 29 },
+  { id: 'C2', lengthFt: 72.5, speedFtPerMin: 120, maxOccupancy: 29 },
+]
+
 function createEngine() {
   const engine = new SimulationEngine(SEGMENTS)
   engine.reset()
@@ -94,5 +105,26 @@ describe('ConveyorDiagram rendering integrity', () => {
     engine.step(1)
 
     expect(initialTray.pilePlacement?.beltPosFt).toBe(initialBeltPosition)
+  })
+
+  test('return topology renders every semantic zone and tray lifecycle attributes', () => {
+    const engine = new SimulationEngine(RETURN_SEGMENTS)
+    const runtime = (engine as unknown as { milestone7: { trays: ReturnType<SimulationEngine['getState']>['trays'] } }).milestone7
+    const held = runtime.trays.find((tray) => tray.zonePlacement?.conveyorId === 'D' && tray.zonePlacement.zoneIndex === 93)!
+    held.zonePlacement = undefined
+    held.korberHeld = true
+    held.loadState = 'FULL'
+    held.returnDestination = 'B2'
+    held.purgeMember = true
+    const markup = renderEngine(engine)
+    const zoneIds = attributeValues(markup, 'data-zone-id')
+    expect(zoneIds).toHaveLength(315)
+    expect(new Set(zoneIds).size).toBe(zoneIds.length)
+    for (const id of ['PURGE:MDR:5', 'E:MDR:34', 'X:MDR:4', 'S:MDR:7', 'A2:MDR:35', 'B2:MDR:28', 'C2:MDR:28']) expect(zoneIds).toContain(id)
+    expect(markup).toContain(`data-tray-id="${held.id}"`)
+    expect(attributeValues(markup, 'data-tray-id').filter((id) => Number(id) === held.id)).toHaveLength(1)
+    expect(markup).toContain('data-load-state="FULL"')
+    expect(markup).toContain('data-return-destination="B2"')
+    expect(markup).toContain('data-purge-member="true"')
   })
 })

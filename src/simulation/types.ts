@@ -1,4 +1,7 @@
 export type TrayStatus = 'MOVING' | 'BLOCKED'
+export type TrayLoadState = 'EMPTY' | 'FULL'
+export type ReturnDestination = 'A2' | 'B2' | 'C2'
+export type ZonedConveyorId = 'PRE_T' | 'T' | 'D' | 'PURGE' | 'E' | 'X' | 'S' | 'A2' | 'B2' | 'C2'
 
 export type SourceId = 'A' | 'B' | 'C'
 
@@ -9,6 +12,10 @@ export interface Tray {
   status: TrayStatus
   createdAtSec: number
   originSourceId: SourceId
+  loadState?: TrayLoadState
+  returnDestination?: ReturnDestination
+  purgeMember?: boolean
+  korberHeld?: boolean
   // optional physical placement inside a logical hybrid pile
   pilePlacement?: {
     pileId: string // e.g. 'A1','B1','C1'
@@ -22,7 +29,7 @@ export interface Tray {
     transferRemainingSec?: number
   }
   zonePlacement?: {
-    conveyorId: 'PRE_T' | 'T' | 'D'
+    conveyorId: ZonedConveyorId
     zoneIndex: number
   }
 }
@@ -105,6 +112,48 @@ export interface BeltDiagnostic {
   leadingBeltTrayPositionFt: number | null
 }
 
+export interface PurgeBatchState {
+  authorizedTrayIds: number[]
+  authorizedCount: number
+  divertedCount: number
+  enteredPurgeCount: number
+  authorizedAtSec: number
+  completedAtSec: number | null
+  status: 'ACTIVE' | 'COMPLETE'
+}
+
+export interface ReturnedTrayRecord {
+  trayId: number
+  loadState: TrayLoadState
+  destination: ReturnDestination
+  acceptedAtSec: number
+}
+
+export interface ReturnSystemState {
+  enabled: boolean
+  korberProcessedCount: number
+  korberHeldTrayId: number | null
+  returnedToAsrsCount: number
+  returnedHistory: ReturnedTrayRecord[]
+  purgeTriggerReady: boolean
+  activePurgeBatch: PurgeBatchState | null
+  lastCompletedPurgeBatch: PurgeBatchState | null
+  sorterCursor: ReturnDestination
+  sorterSelectedDestination: ReturnDestination | null
+  sorterAvailability: Record<ReturnDestination, boolean>
+  sorterBlockedReason: string | null
+  sHeadTrayDestination: ReturnDestination | null
+  assignments: Record<ReturnDestination, { EMPTY: number; FULL: number }>
+  mergeCounts: {
+    eToXFull: number
+    purgeToXEmpty: number
+    blockedE: number
+    blockedPurge: number
+  }
+  exchangerAcceptanceTimes: Record<ReturnDestination, number[]>
+  conveyorOccupancy: Record<'PURGE' | 'E' | 'X' | 'S' | 'A2' | 'B2' | 'C2', number>
+}
+
 export interface SimulationState {
   timeSec: number
   trays: Tray[]
@@ -158,6 +207,7 @@ export interface SimulationState {
   pileAuthorizedExitB: boolean
   pileAuthorizedExitC: boolean
   beltDiagnostics: BeltDiagnostic[]
+  returnSystem: ReturnSystemState
   slugCursor: SourceId
   activeSlug: ActiveSlugState | null
   lastCompletedSlug: ActiveSlugState | null
