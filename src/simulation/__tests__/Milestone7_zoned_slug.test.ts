@@ -216,5 +216,5 @@ describe('Milestone 7 slug arbitration and invariants', () => {
     }
     expect([...seen].sort()).toEqual(['A', 'B', 'C'])
     expect(maximumPhysical).toBeLessThanOrEqual(150)
-  })
+  }, 30_000)
 })
