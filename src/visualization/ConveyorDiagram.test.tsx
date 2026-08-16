@@ -40,9 +40,19 @@ function attributeValues(markup: string, attribute: string): string[] {
 }
 
 function renderedTrayX(markup: string, trayId: number): number {
-  const match = markup.match(new RegExp(`<g data-tray-id="${trayId}"[^>]*><circle cx="([^"]+)"`))
+  const match = markup.match(new RegExp(`<g data-tray-id="${trayId}"[^>]*>[\\s\\S]*?<rect x="([^"]+)"`))
   expect(match, `rendered tray ${trayId}`).not.toBeNull()
   return Number(match![1])
+}
+
+function numericAttributes(markup: string, selector: string, attributes: string[]): number[] {
+  const element = markup.match(new RegExp(`<[^>]+${selector}[^>]*>`))?.[0]
+  expect(element, selector).toBeDefined()
+  return attributes.map((attribute) => {
+    const value = element!.match(new RegExp(`${attribute}="([^"]+)"`))?.[1]
+    expect(value, `${selector} ${attribute}`).toBeDefined()
+    return Number(value)
+  })
 }
 
 describe('ConveyorDiagram rendering integrity', () => {
@@ -126,5 +136,87 @@ describe('ConveyorDiagram rendering integrity', () => {
     expect(markup).toContain('data-load-state="FULL"')
     expect(markup).toContain('data-return-destination="B2"')
     expect(markup).toContain('data-purge-member="true"')
+  })
+
+  test('renders exact return zone counts, hybrid regions, and section labels', () => {
+    const engine = new SimulationEngine(RETURN_SEGMENTS)
+    const markup = renderEngine(engine)
+    const zoneIds = attributeValues(markup, 'data-zone-id')
+    const expected = { PRE_T: 8, T: 12, D: 94, PURGE: 6, E: 35, X: 5, S: 8, A2: 36, B2: 29, C2: 29 }
+    for (const [id, count] of Object.entries(expected)) expect(zoneIds.filter((zoneId) => zoneId.startsWith(`${id}:MDR:`))).toHaveLength(count)
+    for (const pile of ['A1', 'B1', 'C1']) {
+      expect(markup).toContain(`data-conveyor-id="${pile}" data-region="MDR_UPSTREAM"`)
+      expect(markup).toContain(`data-conveyor-id="${pile}" data-region="BELT"`)
+      expect(markup).toContain(`data-conveyor-id="${pile}" data-region="MDR_DOWNSTREAM"`)
+    }
+    for (const label of ['A1 · 24', 'B1 · 16', 'C1 · 16', 'PRE_T · 8 zones', 'T · 12 zones', 'D · 94 zones', 'PURGE · 6 zones', 'E · 35 zones', 'X · 5 zones', 'S · 8 zones', 'A2 · 36 zones', 'B2 · 29 zones', 'C2 · 29 zones', 'KÖRBER', 'A EXCHANGER', 'B EXCHANGER', 'C EXCHANGER']) expect(markup).toContain(label)
+  })
+
+  test('renders every implemented route as a unique semantic connector', () => {
+    const markup = renderEngine(new SimulationEngine(RETURN_SEGMENTS))
+    const connectorIds = attributeValues(markup, 'data-connector-id')
+    expect(connectorIds).toEqual([
+      'A1-to-PRE_T', 'B1-to-PRE_T', 'PRE_T-to-T', 'C1-to-T', 'T-to-D', 'T-to-PURGE', 'D-to-KORBER', 'KORBER-to-E',
+      'E-to-X', 'PURGE-to-X', 'X-to-C2', 'X-to-S', 'S-to-A2', 'S-to-B2', 'A2-to-A-exchanger', 'B2-to-B-exchanger', 'C2-to-C-exchanger',
+    ])
+    expect(new Set(connectorIds).size).toBe(connectorIds.length)
+    expect(attributeValues(markup, 'data-flow-from')).toHaveLength(connectorIds.length)
+    expect(attributeValues(markup, 'data-flow-to')).toHaveLength(connectorIds.length)
+    expect(markup).toContain('data-connector-id="X-to-S" data-flow-from="X" data-flow-to="S"')
+    expect(markup).toContain('data-connector-id="S-to-A2" data-flow-from="S" data-flow-to="A2"')
+    expect(markup).toContain('data-connector-id="S-to-B2" data-flow-from="S" data-flow-to="B2"')
+    expect(markup).toContain('data-connector-id="X-to-C2" data-flow-from="X" data-flow-to="C2"')
+  })
+
+  test('fits all eight S zones and their trays between the B and C exchangers', () => {
+    const engine = new SimulationEngine(RETURN_SEGMENTS)
+    const runtime = (engine as unknown as { milestone7: { trays: ReturnType<SimulationEngine['getState']>['trays'] } }).milestone7
+    const sTrays = runtime.trays.slice(0, 8)
+    sTrays.forEach((tray, zoneIndex) => {
+      tray.pilePlacement = undefined
+      tray.zonePlacement = { conveyorId: 'S', zoneIndex }
+      tray.currentSegmentId = 'S'
+    })
+    const markup = renderEngine(engine)
+    const [sX, sY, sWidth, sHeight] = numericAttributes(markup, 'data-conveyor-bounds="S"', ['data-bounds-x', 'data-bounds-y', 'data-bounds-width', 'data-bounds-height'])
+    const [bX, , bWidth] = numericAttributes(markup, 'data-equipment-id="B_EXCHANGER"', ['data-bounds-x', 'data-bounds-y', 'data-bounds-width'])
+    const [cX] = numericAttributes(markup, 'data-equipment-id="C_EXCHANGER"', ['data-bounds-x'])
+    const sZoneElements = [...markup.matchAll(/<g data-zone-id="S:MDR:[^"]+"[^>]*>[\s\S]*?<rect x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)"/g)]
+
+    expect(sZoneElements).toHaveLength(8)
+    expect(sX).toBeGreaterThanOrEqual(bX + bWidth)
+    expect(sX + sWidth).toBeLessThanOrEqual(cX)
+    for (const [, xValue, yValue, widthValue, heightValue] of sZoneElements) {
+      const [x, y, width, height] = [xValue, yValue, widthValue, heightValue].map(Number)
+      expect(x).toBeGreaterThanOrEqual(sX)
+      expect(x + width).toBeLessThanOrEqual(sX + sWidth)
+      expect(y).toBeGreaterThanOrEqual(sY)
+      expect(y + height).toBeLessThanOrEqual(sY + sHeight)
+    }
+
+    for (const tray of sTrays) {
+      const trayRect = markup.match(new RegExp(`<g data-tray-id="${tray.id}"[^>]*>[\\s\\S]*?<rect x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)"`))
+      expect(trayRect, `S tray ${tray.id}`).not.toBeNull()
+      const [trayX, trayY, trayWidth, trayHeight] = trayRect!.slice(1).map(Number)
+      expect(trayX).toBeGreaterThanOrEqual(sX)
+      expect(trayX + trayWidth).toBeLessThanOrEqual(sX + sWidth)
+      expect(trayY).toBeGreaterThanOrEqual(sY)
+      expect(trayY + trayHeight).toBeLessThanOrEqual(sY + sHeight)
+    }
+  })
+
+  test('uses a fixed responsive viewBox and keeps rendered rectangles inside it without duplicate SVG IDs', () => {
+    const markup = renderEngine(new SimulationEngine(RETURN_SEGMENTS))
+    expect(markup).toContain('viewBox="0 0 1600 850"')
+    expect(markup).toContain('preserveAspectRatio="xMidYMid meet"')
+    const ids = [...markup.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1])
+    expect(new Set(ids).size).toBe(ids.length)
+    for (const match of markup.matchAll(/<rect[^>]* x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)"/g)) {
+      const [, x, y, width, height] = match.map(Number)
+      expect(x).toBeGreaterThanOrEqual(0)
+      expect(y).toBeGreaterThanOrEqual(0)
+      expect(x + width).toBeLessThanOrEqual(1600)
+      expect(y + height).toBeLessThanOrEqual(850)
+    }
   })
 })
