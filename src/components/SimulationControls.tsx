@@ -1,5 +1,5 @@
 import type { FC, ReactNode } from 'react'
-import type { SimulationStateWithProgress } from '../simulation/types'
+import type { OperatingSettings, SimulationStateWithProgress, SourceId } from '../simulation/types'
 
 interface Props {
   state: SimulationStateWithProgress
@@ -9,6 +9,9 @@ interface Props {
   onPlayPause: () => void
   onStep: () => void
   onReset: () => void
+  onOperatingSettingChange: (setting: keyof OperatingSettings, enabled: boolean) => void
+  onPlanningCadenceChange: (seconds: number) => void
+  configurationNotice: string | null
   collapsed: boolean
   onToggleCollapsed: () => void
 }
@@ -17,8 +20,16 @@ const Metric = ({ label, children, tone }: { label: string; children: ReactNode;
   <><span>{label}</span><span className={`value ${tone ?? ''}`}>{children}</span></>
 )
 
+const EnablementToggle = ({ label, setting, enabled, onChange }: { label: string; setting: keyof OperatingSettings; enabled: boolean; onChange: (setting: keyof OperatingSettings, enabled: boolean) => void }) => (
+  <label className={`enablement-toggle ${enabled ? 'enabled' : 'disabled'}`}>
+    <span>{label}</span>
+    <input type="checkbox" checked={enabled} onChange={(event) => onChange(setting, event.currentTarget.checked)} />
+    <span className="toggle-state">{enabled ? 'ON' : 'OFF'}</span>
+  </label>
+)
+
 const SimulationControls: FC<Props> = ({
-  state, playing, playbackSpeed, setPlaybackSpeed, onPlayPause, onStep, onReset, collapsed, onToggleCollapsed,
+  state, playing, playbackSpeed, setPlaybackSpeed, onPlayPause, onStep, onReset, onOperatingSettingChange, onPlanningCadenceChange, configurationNotice, collapsed, onToggleCollapsed,
 }) => {
   const purge = state.returnSystem.activePurgeBatch
   const frozenIds = purge?.authorizedTrayIds ?? state.returnSystem.lastCompletedPurgeBatch?.authorizedTrayIds ?? []
@@ -32,6 +43,62 @@ const SimulationControls: FC<Props> = ({
         </button>
       </div>
       {!collapsed && <div className="panel-body">
+        <section className="diagnostic-group enablement-group">
+          <h2>Process enablement</h2>
+          <div className="enablement-list">
+            <EnablementToggle label="Körber" setting="korberEnabled" enabled={state.operatingSettings.korberEnabled} onChange={onOperatingSettingChange} />
+            <EnablementToggle label="Cartbuild A" setting="cartbuildAEnabled" enabled={state.operatingSettings.cartbuildAEnabled} onChange={onOperatingSettingChange} />
+            <EnablementToggle label="Cartbuild B" setting="cartbuildBEnabled" enabled={state.operatingSettings.cartbuildBEnabled} onChange={onOperatingSettingChange} />
+            <EnablementToggle label="Cartbuild C" setting="cartbuildCEnabled" enabled={state.operatingSettings.cartbuildCEnabled} onChange={onOperatingSettingChange} />
+          </div>
+          {configurationNotice && <p className="configuration-notice" role="status">{configurationNotice}</p>}
+        </section>
+
+        <section className="diagnostic-group" data-srs-diagnostics>
+          <h2>SRS demand control</h2>
+          <label className="cadence-control">
+            <span>Planning cadence</span>
+            <span><input aria-label="PendingDemand planning cadence" type="number" min="0.1" step="0.1" value={state.srsControl.planningCadenceSec} onChange={(event) => {
+              const seconds = Number(event.currentTarget.value)
+              if (Number.isFinite(seconds) && seconds > 0) onPlanningCadenceChange(seconds)
+            }} /> sim s</span>
+          </label>
+          <div className="diagnostic-grid">
+            <Metric label="Next planning">{state.srsControl.nextPlanningTime.toFixed(1)}s</Metric>
+            <Metric label="Planning cursor">{state.srsControl.planningCursor}</Metric>
+            <Metric label="Target / current">{`${state.srsControl.globalTarget}/${state.srsControl.globalCurrent}`}</Metric>
+            <Metric label="Pending / available">{`${state.srsControl.globalPending}/${state.srsControl.globalAvailableCapacity}`}</Metric>
+          </div>
+          {(['A', 'B', 'C'] as SourceId[]).map((source) => {
+            const lane = state.srsControl.lanes[source]
+            return <details key={source} data-srs-lane={source}>
+              <summary>{`${source}1 · current ${lane.currentCount}/${lane.targetSize} · pending ${lane.pendingDemand} · PurgeDemand ${lane.lanePurgeDemand}`}</summary>
+              <div className="diagnostic-grid detail-grid">
+                <Metric label="Local / downstream avail.">{`${lane.localAvailable}/${lane.downstreamAvailable}`}</Metric>
+                <Metric label="Mission capacity">{lane.laneMissionCapacity}</Metric>
+                <Metric label="Pending EMPTY / CARTBUILD">{`${lane.pendingEmptyMissions}/${lane.pendingCartbuildMissions}`}</Metric>
+                <Metric label="Matured EMPTY / CARTBUILD">{`${lane.maturedEmptyMissions}/${lane.maturedCartbuildMissions}`}</Metric>
+                <Metric label="Last / next release">{`${lane.lastActualExchangerReleaseTime?.toFixed(1) ?? 'none'}/${lane.nextEligibleExchangerReleaseTime.toFixed(1)}s`}</Metric>
+                <Metric label="Source batch">{lane.activeSourceBatch ? `${lane.sourceBatchReleasedCount}/${lane.frozenSourceBatchQuantity} (${lane.sourceBatchRemainingCount} left)` : 'IDLE'}</Metric>
+              </div>
+            </details>
+          })}
+          <details data-srs-downstream>
+            <summary>Downstream SRS piles</summary>
+            <ul className="detail-list">
+              {(['T', 'D', 'A2', 'B2', 'C2'] as const).map((pile) => <li key={pile}>{pile}: {state.srsControl.current[pile]}/{state.srsControl.targets[pile]}</li>)}
+            </ul>
+          </details>
+          <details data-t-bypass>
+            <summary>{`T bypass · ${state.srsControl.tBypassBatch.active ? 'ACTIVE' : 'IDLE'} · ${state.srsControl.tBypassBatch.enteredCount}/6 entered`}</summary>
+            <ul className="detail-list">
+              <li>Frozen IDs: {state.srsControl.tBypassBatch.authorizedTrayIds.length ? state.srsControl.tBypassBatch.authorizedTrayIds.join(', ') : 'none'}</li>
+              <li>Remaining: {state.srsControl.tBypassBatch.remainingCount}</li>
+              <li>Source paused: {state.srsControl.tBypassBatch.sourceBatchPaused ? 'YES' : 'NO'}</li>
+            </ul>
+          </details>
+        </section>
+
         <section className="diagnostic-group">
           <h2>Simulation</h2>
           <div className="diagnostic-grid">
@@ -99,6 +166,30 @@ const SimulationControls: FC<Props> = ({
               <li>Sorter block: {state.returnSystem.sorterBlockedReason ?? 'none'}</li>
             </ul>
           </details>
+        </section>
+
+        <section className="diagnostic-group">
+          <h2>Cartbuild</h2>
+          <div className="diagnostic-grid">
+            <Metric label="Carton balance" tone={state.cartbuildSystem.cartonBalanceError === 0 ? 'ok' : 'alert'}>{state.cartbuildSystem.cartonBalanceError}</Metric>
+            <Metric label="Attached / lanes">{`${state.cartbuildSystem.cartbuildCartonsAttachedToTrays}/${state.cartbuildSystem.cartbuildCartonsOnConveyors}`}</Metric>
+            <Metric label="Operator consumed">{state.cartbuildSystem.cartbuildCartonsConsumedByOperators}</Metric>
+          </div>
+          {(['A', 'B', 'C'] as SourceId[]).map((source) => {
+            const lane = state.cartbuildSystem.lanes[`CARTBUILD_${source}` as keyof typeof state.cartbuildSystem.lanes]
+            const exchanger = state.cartbuildSystem.exchangers[source]
+            const detrayer = state.cartbuildSystem.detrayers[source]
+            return <details key={source} data-cartbuild-diagnostics={source}>
+              <summary>{`Cartbuild ${source} · ${lane.enabled ? 'ON' : 'OFF'} · ${lane.occupancy}/30 cartons`}</summary>
+              <div className="diagnostic-grid detail-grid">
+                <Metric label="Loaded / empty releases">{`${exchanger.loadedReleases}/${exchanger.emptyReleases}`}</Metric>
+                <Metric label="Last release">{exchanger.mostRecentReleaseType ?? 'NONE'}</Metric>
+                <Metric label="Detrayer">{detrayer.loadedTrayWaiting ? `WAITING ${detrayer.trayId}` : 'CLEAR'}</Metric>
+                <Metric label="Operator consumed">{lane.operatorConsumedCount}</Metric>
+                <Metric label="Pending empty">{exchanger.pendingEmptyMissions}</Metric>
+              </div>
+            </details>
+          })}
         </section>
       </div>}
     </aside>

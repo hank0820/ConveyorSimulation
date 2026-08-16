@@ -14,7 +14,7 @@ describe('SimulationControls panel', () => {
     engine.step(12.3)
     const state = engine.getState()
     const frozen = JSON.stringify(state)
-    const common = { state, playing: true, playbackSpeed: 20, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onToggleCollapsed: vi.fn() }
+    const common = { state, playing: true, playbackSpeed: 20, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, onToggleCollapsed: vi.fn() }
     const expanded = renderToStaticMarkup(createElement(SimulationControls, { ...common, collapsed: false }))
     const collapsed = renderToStaticMarkup(createElement(SimulationControls, { ...common, collapsed: true }))
     expect(expanded).toContain('data-panel-state="expanded"')
@@ -25,5 +25,38 @@ describe('SimulationControls panel', () => {
     expect(collapsed).not.toContain('class="panel-body"')
     expect(JSON.stringify(state)).toBe(frozen)
     expect(engine.getState()).toEqual(state)
+  })
+
+  test('renders four accessible ON enablement controls and the configuration-pause notice', () => {
+    const engine = new SimulationEngine(SEGMENTS)
+    const state = engine.getState()
+    const markup = renderToStaticMarkup(createElement(SimulationControls, {
+      state, playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(),
+      onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: 'Simulation paused after configuration change', collapsed: false, onToggleCollapsed: vi.fn(),
+    }))
+    expect(markup).toContain('Process enablement')
+    for (const label of ['Körber', 'Cartbuild A', 'Cartbuild B', 'Cartbuild C']) expect(markup).toContain(label)
+    expect((markup.match(/type="checkbox" checked=""/g) ?? [])).toHaveLength(4)
+    expect((markup.match(/class="toggle-state">ON/g) ?? [])).toHaveLength(4)
+    expect(markup).toContain('role="status">Simulation paused after configuration change')
+  })
+
+  test('renders SRS reservation, lane, bypass, and cadence diagnostics', () => {
+    const state = new SimulationEngine([...SEGMENTS,
+      { id: 'CARTBUILD_A', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
+      { id: 'CARTBUILD_B', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
+      { id: 'CARTBUILD_C', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
+    ]).getState()
+    const markup = renderToStaticMarkup(createElement(SimulationControls, {
+      state, playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(),
+      onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, collapsed: false, onToggleCollapsed: vi.fn(),
+    }))
+    expect(markup).toContain('SRS demand control')
+    expect(markup).toContain('aria-label="PendingDemand planning cadence"')
+    expect(markup).toContain('value="10"')
+    expect(markup).toContain('Target / current')
+    expect((markup.match(/data-srs-lane=/g) ?? [])).toHaveLength(3)
+    expect(markup).toContain('PurgeDemand')
+    expect(markup).toContain('T bypass')
   })
 })

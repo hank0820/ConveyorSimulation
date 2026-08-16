@@ -1,4 +1,4 @@
-import type { Tray, ConveyorSegmentConfig, SimulationStateWithProgress, SourceConfig, SourceId, MergeState, SourceState } from './types'
+import type { Tray, ConveyorSegmentConfig, SimulationStateWithProgress, SourceConfig, SourceId, MergeState, OperatingSettings, SourceState } from './types'
 import ConveyorSegment from './ConveyorSegment'
 import HybridAccumulationPile from './HybridAccumulationPile'
 import Milestone7Simulation from './Milestone7Simulation'
@@ -171,6 +171,19 @@ export class SimulationEngine {
       this.processTick(delta)
       this.attemptExchangerReleases()
     }
+  }
+
+  setOperatingSetting(setting: keyof OperatingSettings, enabled: boolean) {
+    this.milestone7?.setOperatingSetting(setting, enabled)
+  }
+
+  getOperatingSettings(): OperatingSettings {
+    return this.milestone7?.getOperatingSettings() ?? { korberEnabled: true, cartbuildAEnabled: true, cartbuildBEnabled: true, cartbuildCEnabled: true }
+  }
+
+  setPendingDemandPlanningCadence(seconds: number) {
+    if (this.milestone7) this.milestone7.setPendingDemandPlanningCadence(seconds)
+    else if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('PendingDemand planning cadence must be a positive finite number')
   }
 
   private tryInjectSources() {
@@ -543,6 +556,7 @@ export class SimulationEngine {
       const mission = {
         missionId: ++this.missionCounter,
         assignedExchanger: assigned,
+        missionType: 'EMPTY' as const,
         createdAtSec: this.timeSec,
         readyAtSec: this.timeSec + 180,
         state: 'RETRIEVING' as const,
@@ -1057,6 +1071,33 @@ export class SimulationEngine {
       pileAuthorizedExitB,
       pileAuthorizedExitC,
       beltDiagnostics: [],
+      operatingSettings: this.getOperatingSettings(),
+      cartbuildSystem: {
+        enabled: false,
+        settings: this.getOperatingSettings(),
+        lanes: {
+          CARTBUILD_A: { id: 'CARTBUILD_A', enabled: false, lengthFt: 75, zoneCount: 30, speedFtPerMin: 120, zoneTransferSec: 1.25, markers: [], occupancy: 0, introducedCount: 0, operatorConsumedCount: 0, operatorConsumptionTimes: [], finalZoneOccupied: false, nextEligibleConsumptionTime: 0, lastConsumedTime: null, configuredRatePerHour: 450 },
+          CARTBUILD_B: { id: 'CARTBUILD_B', enabled: false, lengthFt: 75, zoneCount: 30, speedFtPerMin: 120, zoneTransferSec: 1.25, markers: [], occupancy: 0, introducedCount: 0, operatorConsumedCount: 0, operatorConsumptionTimes: [], finalZoneOccupied: false, nextEligibleConsumptionTime: 0, lastConsumedTime: null, configuredRatePerHour: 450 },
+          CARTBUILD_C: { id: 'CARTBUILD_C', enabled: false, lengthFt: 75, zoneCount: 30, speedFtPerMin: 120, zoneTransferSec: 1.25, markers: [], occupancy: 0, introducedCount: 0, operatorConsumedCount: 0, operatorConsumptionTimes: [], finalZoneOccupied: false, nextEligibleConsumptionTime: 0, lastConsumedTime: null, configuredRatePerHour: 450 },
+        },
+        exchangers: {
+          A: { source: 'A', cartbuildEnabled: false, lastActualReleaseTime: null, nextEligibleReleaseTime: 0, loadedReleases: 0, emptyReleases: 0, blockedLoadedAttempts: 0, blockedEmptyAttempts: 0, pendingEmptyMissions: 0, mostRecentReleaseType: null, releaseTimes: [] },
+          B: { source: 'B', cartbuildEnabled: false, lastActualReleaseTime: null, nextEligibleReleaseTime: 0, loadedReleases: 0, emptyReleases: 0, blockedLoadedAttempts: 0, blockedEmptyAttempts: 0, pendingEmptyMissions: 0, mostRecentReleaseType: null, releaseTimes: [] },
+          C: { source: 'C', cartbuildEnabled: false, lastActualReleaseTime: null, nextEligibleReleaseTime: 0, loadedReleases: 0, emptyReleases: 0, blockedLoadedAttempts: 0, blockedEmptyAttempts: 0, pendingEmptyMissions: 0, mostRecentReleaseType: null, releaseTimes: [] },
+        },
+        detrayers: Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => [source, { source, loadedTrayWaiting: false, trayId: null, zone3Available: true, cartonLaneZone0Available: true, splitCount: 0, blockedTicks: 0, blockedDurationSec: 0, mostRecentSplitTime: null }])) as SimulationStateWithProgress['cartbuildSystem']['detrayers'],
+        cartbuildCartonsIntroduced: 0, cartbuildCartonsAttachedToTrays: 0, cartbuildCartonsOnConveyors: 0, cartbuildCartonsConsumedByOperators: 0, cartonBalanceError: 0,
+      },
+      srsControl: {
+        targets: { A1: 24, B1: 16, C1: 16, T: 6, D: 73, A2: 36, B2: 29, C2: 29 },
+        current: { A1: occA, B1: occB, C1: occC, T: occT, D: occD, A2: 0, B2: 0, C2: 0 },
+        globalTarget: 229, globalCurrent: occA + occB + occC + occT + occD,
+        globalPending: pendingBy.A + pendingBy.B + pendingBy.C,
+        globalAvailableCapacity: Math.max(0, 229 - occA - occB - occC - occT - occD - pendingBy.A - pendingBy.B - pendingBy.C),
+        planningCadenceSec: 10, nextPlanningTime: 0, planningCursor: this.asrsNextAssign,
+        lanes: Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => [source, { source, targetSize: source === 'A' ? 24 : 16, currentCount: source === 'A' ? occA : source === 'B' ? occB : occC, pendingDemand: pendingBy[source], lanePurgeDemand: 0, localAvailable: 0, downstreamAvailable: 0, laneMissionCapacity: 0, pendingEmptyMissions: pendingBy[source], pendingCartbuildMissions: 0, maturedEmptyMissions: 0, maturedCartbuildMissions: 0, lastActualExchangerReleaseTime: null, nextEligibleExchangerReleaseTime: 0, activeSourceBatch: false, frozenSourceBatchQuantity: 0, sourceBatchReleasedCount: 0, sourceBatchRemainingCount: 0 }])) as SimulationStateWithProgress['srsControl']['lanes'],
+        tBypassBatch: { active: false, authorizedTrayIds: [], enteredCount: 0, remainingCount: 0, sourceBatchPaused: false },
+      },
       returnSystem: {
         enabled: false,
         korberProcessedCount: 0,
