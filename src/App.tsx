@@ -26,6 +26,7 @@ function App() {
   const [state, setState] = useState<SimulationStateWithProgress>(() => engineRef.current.getState())
   const [playing, setPlaying] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
+  const [panelCollapsed, setPanelCollapsed] = useState(false)
 
   // animation loop
   useEffect(() => {
@@ -72,7 +73,21 @@ function App() {
   }
 
   return (
-    <div style={{ padding: 16 }}>
+    <main className={`simulation-app ${panelCollapsed ? 'panel-collapsed' : ''}`}>
+      <section className="schematic-workspace" aria-label="Conveyor schematic workspace">
+        <header className="app-header">
+          <div>
+            <span className="eyebrow">Material flow control</span>
+            <h1>Conveyor Simulation</h1>
+          </div>
+          <div className={`system-status ${state.materialBalanceError === 0 ? 'status-ok' : 'status-alert'}`}>
+            {state.materialBalanceError === 0 ? 'SYSTEM BALANCED' : 'BALANCE ALERT'}
+          </div>
+        </header>
+        <div className="diagram-frame">
+          <ConveyorDiagram segments={state.segments} trays={state.trays} state={state} />
+        </div>
+      </section>
       <SimulationControls
         state={state}
         playing={playing}
@@ -81,12 +96,10 @@ function App() {
         onPlayPause={handlePlayPause}
         onStep={handleStep}
         onReset={handleReset}
+        collapsed={panelCollapsed}
+        onToggleCollapsed={() => setPanelCollapsed((collapsed) => !collapsed)}
       />
-
-      <div style={{ marginTop: 16 }}>
-        <ConveyorDiagram segments={state.segments} trays={state.trays} state={state} />
-      </div>
-    </div>
+    </main>
   )
 }
 
