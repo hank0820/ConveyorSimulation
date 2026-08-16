@@ -1,326 +1,176 @@
-import type { FC, ReactElement } from 'react'
-import type { ConveyorSegmentConfig, Tray, SimulationStateWithProgress, ZonedConveyorId } from '../simulation/types'
+import type { FC, ReactNode } from 'react'
+import type { ConveyorSegmentConfig, SimulationStateWithProgress, Tray, ZonedConveyorId } from '../simulation/types'
 
-type BranchId = 'A' | 'B' | 'C'
+interface Props { segments: ConveyorSegmentConfig[]; trays: Tray[]; state: SimulationStateWithProgress }
+type Orientation = 'horizontal' | 'vertical'
+type Region = 'MDR' | 'MDR_UPSTREAM' | 'BELT' | 'MDR_DOWNSTREAM'
+interface LayoutRect { x: number; y: number; w: number; h: number; conveyorId: string; region: Region; orientation: Orientation; zoneIndex?: number; reverse?: boolean }
 
-interface Props {
-  segments: ConveyorSegmentConfig[]
-  trays: Tray[]
-  state: SimulationStateWithProgress
+const VIEWBOX = { width: 1600, height: 850 }
+const ZONE_THICKNESS = 24
+const COLORS = {
+  canvas: '#f8fafb', grid: '#e6ebef', conveyor: '#dce2e6', conveyorEdge: '#647581', belt: '#a8bcc8', beltEdge: '#435f70', text: '#22333e', muted: '#627480', connector: '#526a78',
+  empty: '#2b78a0', full: '#e57b25', held: '#9b51a8', purge: '#f4c542', A2: '#b74747', B2: '#7254a5', C2: '#34815c',
 }
 
+const ZONED_SPECS: Array<{ id: ZonedConveyorId; count: number; x: number; y: number; length: number; orientation: Orientation; reverse?: boolean; label: string }> = [
+  { id: 'PRE_T', count: 8, x: 450, y: 90, length: 160, orientation: 'horizontal', label: 'PRE_T · 8 zones' },
+  { id: 'T', count: 12, x: 650, y: 90, length: 180, orientation: 'horizontal', label: 'T · 12 zones' },
+  { id: 'D', count: 94, x: 850, y: 90, length: 650, orientation: 'horizontal', label: 'D · 94 zones' },
+  { id: 'PURGE', count: 6, x: 806, y: 170, length: 150, orientation: 'vertical', label: 'PURGE · 6 zones' },
+  { id: 'E', count: 35, x: 850, y: 330, length: 610, orientation: 'horizontal', reverse: true, label: 'E · 35 zones' },
+  { id: 'X', count: 5, x: 794, y: 370, length: 120, orientation: 'vertical', label: 'X · 5 zones' },
+  { id: 'S', count: 8, x: 488, y: 540, length: 74, orientation: 'horizontal', reverse: true, label: 'S · 8 zones' },
+  { id: 'A2', count: 36, x: 288, y: 590, length: 205, orientation: 'vertical', label: 'A2 · 36 zones' },
+  { id: 'B2', count: 29, x: 418, y: 590, length: 205, orientation: 'vertical', label: 'B2 · 29 zones' },
+  { id: 'C2', count: 29, x: 608, y: 590, length: 205, orientation: 'vertical', label: 'C2 · 29 zones' },
+]
+
+const PILES = [
+  { id: 'A1', x: 300, upstream: 8, beltFt: 23.5, beltHeight: 70, downstream: 15, label: 'A1 · 24' },
+  { id: 'B1', x: 430, upstream: 8, beltFt: 43.5, beltHeight: 120, downstream: 7, label: 'B1 · 16' },
+  { id: 'C1', x: 620, upstream: 8, beltFt: 43.5, beltHeight: 120, downstream: 7, label: 'C1 · 16' },
+] as const
+
+const Connector = ({ id, from, to, d }: { id: string; from: string; to: string; d: string }) => (
+  <path data-connector-id={id} data-flow-from={from} data-flow-to={to} d={d} fill="none" stroke={COLORS.connector} strokeWidth={3} strokeLinejoin="round" markerEnd="url(#flow-arrow)" />
+)
+
+const Equipment = ({ id, x, y, width, children }: { id: string; x: number; y: number; width: number; children: ReactNode }) => (
+  <g data-equipment-id={id} data-bounds-x={x} data-bounds-y={y} data-bounds-width={width} data-bounds-height={34}>
+    <rect x={x} y={y} width={width} height={34} rx={4} fill="#e6edf2" stroke="#5d7280" strokeWidth={2} />
+    <text x={x + width / 2} y={y + 21} textAnchor="middle" fontSize={11} fontWeight={700} fill={COLORS.text}>{children}</text>
+  </g>
+)
+
 const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
-  const width = 1120
-  const height = state.returnSystem.enabled ? 520 : 330
-  const padding = 20
-  const branchStartX = 130
-  const exchangerX = 20
-  const branchMaxWidth = 260
+  const layouts = new Map<string, LayoutRect>()
 
-  const rowYs: Record<BranchId, number> = {
-    A: 60,
-    B: 140,
-    C: 220,
-  }
-
-  const missionCounts: Record<BranchId, { retrieving: number; ready: number; pending: number }> = {
-    A: {
-      retrieving: state.retrievingA,
-      ready: state.readyA,
-      pending: state.pendingA,
-    },
-    B: {
-      retrieving: state.retrievingB,
-      ready: state.readyB,
-      pending: state.pendingB,
-    },
-    C: {
-      retrieving: state.retrievingC,
-      ready: state.readyC,
-      pending: state.pendingC,
-    },
-  }
-
-  const branchTotals = {
-    A: segments
-      .filter((s) => s.id === 'A1')
-      .reduce((sum, s) => sum + s.lengthFt, 0),
-    B: segments
-      .filter((s) => s.id === 'B1')
-      .reduce((sum, s) => sum + s.lengthFt, 0),
-    C: segments
-      .filter((s) => s.id === 'C1')
-      .reduce((sum, s) => sum + s.lengthFt, 0),
-  }
-
-  const branchScales = {
-    A: branchTotals.A > 0 ? branchMaxWidth / branchTotals.A : 1,
-    B: branchTotals.B > 0 ? branchMaxWidth / branchTotals.B : 1,
-    C: branchTotals.C > 0 ? branchMaxWidth / branchTotals.C : 1,
-  }
-
-  const segmentLayout = new Map<string, {
-    x: number
-    y: number
-    w: number
-    h: number
-    lengthFt: number
-    pileId?: string
-    region?: 'MDR_UPSTREAM' | 'BELT' | 'MDR_DOWNSTREAM' | 'MDR'
-    zoneIndex?: number
-  }>()
-
-  const rectHeight = 24
-  const textOffset = 14
-
-  // draw hybrid pile A1: 8 upstream MDR (2.5ft) + 23.5ft belt + 15 downstream MDR (2.5ft)
-  const A1_len = segments.find((s) => s.id === 'A1')?.lengthFt ?? 81
-  const A1_up = 8
-  const A1_down = 15
-  const A1_belt = 23.5
-
-  // draw hybrid pile B1/C1: 8 upstream + 7 downstream + 43.5ft belt
-  const B1_len = segments.find((s) => s.id === 'B1')?.lengthFt ?? 81
-  const B1_up = 8
-  const B1_down = 7
-  const B1_belt = 43.5
-
-  const drawMdrBank = (
-    startX: number,
-    row: 'A' | 'B' | 'C',
-    region: 'MDR_UPSTREAM' | 'MDR_DOWNSTREAM',
-    count: number,
-    zoneLen: number,
-    scale: number,
-  ) => {
-    let x = startX
-    const pileId = `${row}1`
-    for (let i = 0; i < count; i++) {
-      const w = Math.max(6, Math.round(zoneLen * scale))
-      const id = `${pileId}:${region}:${i}`
-      segmentLayout.set(id, { x, y: rowYs[row], w, h: rectHeight, lengthFt: zoneLen, pileId, region, zoneIndex: i })
-      x += w + 2
+  for (const spec of ZONED_SPECS) {
+    if (!segments.some((segment) => segment.id === spec.id)) continue
+    const zoneLength = spec.length / spec.count
+    for (let index = 0; index < spec.count; index++) {
+      const visualIndex = spec.reverse ? spec.count - 1 - index : index
+      const rect: LayoutRect = spec.orientation === 'horizontal'
+        ? { x: spec.x + visualIndex * zoneLength, y: spec.y - ZONE_THICKNESS / 2, w: zoneLength, h: ZONE_THICKNESS, conveyorId: spec.id, region: 'MDR', orientation: spec.orientation, zoneIndex: index, reverse: spec.reverse }
+        : { x: spec.x - ZONE_THICKNESS / 2, y: spec.y + visualIndex * zoneLength, w: ZONE_THICKNESS, h: zoneLength, conveyorId: spec.id, region: 'MDR', orientation: spec.orientation, zoneIndex: index, reverse: spec.reverse }
+      layouts.set(`${spec.id}:MDR:${index}`, rect)
     }
-    return x
   }
 
-  let nextAx = branchStartX
-  const scaleA = branchScales.A
-  nextAx = drawMdrBank(nextAx, 'A', 'MDR_UPSTREAM', A1_up, 2.5, scaleA)
-  // belt
-  const beltAx = nextAx
-  const beltAw = Math.max(40, Math.round(A1_belt * scaleA))
-  segmentLayout.set('A1:BELT', { x: beltAx, y: rowYs.A, w: beltAw, h: rectHeight, lengthFt: A1_belt, pileId: 'A1', region: 'BELT' })
-  nextAx = beltAx + beltAw + 6
-  nextAx = drawMdrBank(nextAx, 'A', 'MDR_DOWNSTREAM', A1_down, 2.5, scaleA)
-  // mark logical segment A1 spanning
-  segmentLayout.set('A1', { x: branchStartX, y: rowYs.A, w: nextAx - branchStartX, h: rectHeight, lengthFt: A1_len })
-
-  let nextBx = branchStartX
-  const scaleB = branchScales.B
-  nextBx = drawMdrBank(nextBx, 'B', 'MDR_UPSTREAM', B1_up, 2.5, scaleB)
-  const beltBx = nextBx
-  const beltBw = Math.max(40, Math.round(B1_belt * scaleB))
-  segmentLayout.set('B1:BELT', { x: beltBx, y: rowYs.B, w: beltBw, h: rectHeight, lengthFt: B1_belt, pileId: 'B1', region: 'BELT' })
-  nextBx = beltBx + beltBw + 6
-  nextBx = drawMdrBank(nextBx, 'B', 'MDR_DOWNSTREAM', B1_down, 2.5, scaleB)
-  segmentLayout.set('B1', { x: branchStartX, y: rowYs.B, w: nextBx - branchStartX, h: rectHeight, lengthFt: B1_len })
-  let nextCx = branchStartX
-  const scaleC = branchScales.C
-  nextCx = drawMdrBank(nextCx, 'C', 'MDR_UPSTREAM', B1_up, 2.5, scaleC)
-  const beltCx = nextCx
-  const beltCw = Math.max(40, Math.round(B1_belt * scaleC))
-  segmentLayout.set('C1:BELT', { x: beltCx, y: rowYs.C, w: beltCw, h: rectHeight, lengthFt: B1_belt, pileId: 'C1', region: 'BELT' })
-  nextCx = beltCx + beltCw + 6
-  nextCx = drawMdrBank(nextCx, 'C', 'MDR_DOWNSTREAM', B1_down, 2.5, scaleC)
-  segmentLayout.set('C1', { x: branchStartX, y: rowYs.C, w: nextCx - branchStartX, h: rectHeight, lengthFt: B1_len })
-
-  const drawZonedConveyor = (id: ZonedConveyorId, x: number, y: number, count: number, totalWidth: number) => {
-    const zoneWidth = totalWidth / count
-    for (let index = 0; index < count; index++) {
-      segmentLayout.set(`${id}:MDR:${index}`, { x: x + index * zoneWidth, y, w: zoneWidth, h: 32, lengthFt: 2.5, pileId: id, region: 'MDR', zoneIndex: index })
+  for (const pile of PILES) {
+    const bottom = 500
+    const upstreamZoneHeight = 10
+    const downstreamZoneHeight = 8
+    for (let index = 0; index < pile.upstream; index++) {
+      layouts.set(`${pile.id}:MDR_UPSTREAM:${index}`, { x: pile.x - ZONE_THICKNESS / 2, y: bottom - (index + 1) * upstreamZoneHeight, w: ZONE_THICKNESS, h: upstreamZoneHeight, conveyorId: pile.id, region: 'MDR_UPSTREAM', orientation: 'vertical', zoneIndex: index })
     }
-    segmentLayout.set(id, { x, y, w: totalWidth, h: 32, lengthFt: count * 2.5 })
+    const beltBottom = bottom - pile.upstream * upstreamZoneHeight
+    layouts.set(`${pile.id}:BELT`, { x: pile.x - ZONE_THICKNESS / 2, y: beltBottom - pile.beltHeight, w: ZONE_THICKNESS, h: pile.beltHeight, conveyorId: pile.id, region: 'BELT', orientation: 'vertical' })
+    const downstreamBottom = beltBottom - pile.beltHeight
+    for (let index = 0; index < pile.downstream; index++) {
+      layouts.set(`${pile.id}:MDR_DOWNSTREAM:${index}`, { x: pile.x - ZONE_THICKNESS / 2, y: downstreamBottom - (index + 1) * downstreamZoneHeight, w: ZONE_THICKNESS, h: downstreamZoneHeight, conveyorId: pile.id, region: 'MDR_DOWNSTREAM', orientation: 'vertical', zoneIndex: index })
+    }
   }
 
-  const preTX = 500
-  const preTY = 100
-  drawZonedConveyor('PRE_T', preTX, preTY, 8, 96)
-  const tX = 640
-  const tY = rowYs.B
-  const tW = 144
-  drawZonedConveyor('T', tX, tY, 12, tW)
-
-  const dX = tX + tW + 30
-  const dY = tY
-  const dW = 282
-  drawZonedConveyor('D', dX, dY, 94, dW)
-
-  if (state.returnSystem.enabled) {
-    drawZonedConveyor('PURGE', 620, 290, 6, 120)
-    drawZonedConveyor('E', 120, 350, 35, 350)
-    drawZonedConveyor('X', 500, 350, 5, 100)
-    drawZonedConveyor('C2', 770, 290, 29, 300)
-    drawZonedConveyor('S', 650, 390, 8, 120)
-    drawZonedConveyor('B2', 800, 370, 29, 290)
-    drawZonedConveyor('A2', 800, 450, 36, 290)
-  }
-
-  const trayPositions = trays.map((t) => {
-    if (t.zonePlacement) {
-      const layout = segmentLayout.get(`${t.zonePlacement.conveyorId}:MDR:${t.zonePlacement.zoneIndex}`)
-      if (layout) return { id: t.id, cx: layout.x + layout.w / 2, cy: layout.y, segId: t.zonePlacement.conveyorId, zoneIndex: t.zonePlacement.zoneIndex }
+  const trayPositions = trays.map((tray) => {
+    if (tray.korberHeld) return { tray, x: 1540, y: 140, width: 18, orientation: 'horizontal' as Orientation, segment: 'KORBER' }
+    let layout: LayoutRect | undefined
+    if (tray.zonePlacement) layout = layouts.get(`${tray.zonePlacement.conveyorId}:MDR:${tray.zonePlacement.zoneIndex}`)
+    else if (tray.pilePlacement?.component === 'BELT') layout = layouts.get(`${tray.pilePlacement.pileId}:BELT`)
+    else if (tray.pilePlacement) layout = layouts.get(`${tray.pilePlacement.pileId}:${tray.pilePlacement.component}:${tray.pilePlacement.zoneIndex ?? 0}`)
+    if (!layout) return { tray, x: 28, y: 810, width: 12, orientation: 'horizontal' as Orientation, segment: tray.currentSegmentId }
+    if (tray.pilePlacement?.component === 'BELT') {
+      const pile = PILES.find(({ id }) => id === tray.pilePlacement?.pileId)!
+      const progress = Math.max(0, Math.min(1, (tray.pilePlacement.beltPosFt ?? 0) / pile.beltFt))
+      return { tray, x: layout.x + layout.w / 2, y: layout.y + layout.h - progress * layout.h, width: layout.w, orientation: layout.orientation, segment: pile.id }
     }
-    if (t.korberHeld) return { id: t.id, cx: 90, cy: 350, segId: 'KORBER' }
-    // if tray has pilePlacement metadata, map it to the specific visual subcomponent
-    if (t.pilePlacement) {
-      const pile = t.pilePlacement.pileId
-      if (t.pilePlacement.component === 'BELT') {
-        const layout = segmentLayout.get(`${pile}:BELT`)
-        if (layout) {
-          const beltPos = t.pilePlacement.beltPosFt ?? 0
-          const pct = layout.lengthFt > 0 ? Math.max(0, Math.min(1, beltPos / layout.lengthFt)) : 0
-          const cx = layout.x + pct * layout.w
-          return { id: t.id, cx, cy: layout.y, segId: pile }
-        }
-      }
-      if (t.pilePlacement.component === 'MDR_UPSTREAM' || t.pilePlacement.component === 'MDR_DOWNSTREAM') {
-        const zoneIdx = t.pilePlacement.zoneIndex ?? 0
-        const mdrId = `${pile}:${t.pilePlacement.component}:${zoneIdx}`
-        const layout = segmentLayout.get(mdrId)
-        if (layout) {
-          const cx = layout.x + layout.w / 2
-          return { id: t.id, cx, cy: layout.y, segId: pile }
-        }
-      }
-    }
-    const layout = segmentLayout.get(t.currentSegmentId)
-    if (!layout) {
-      const fallbackY = rowYs.C + 80
-      return {
-        id: t.id,
-        cx: padding + 40,
-        cy: fallbackY,
-        segId: t.currentSegmentId,
-      }
-    }
-    const pct = layout.lengthFt > 0 ? Math.max(0, Math.min(1, t.positionFt / layout.lengthFt)) : 0
-    const cx = layout.x + pct * layout.w
-    return { id: t.id, cx, cy: layout.y, segId: t.currentSegmentId }
+    return { tray, x: layout.x + layout.w / 2, y: layout.y + layout.h / 2, width: layout.orientation === 'horizontal' ? layout.w : layout.h, orientation: layout.orientation, segment: layout.conveyorId, zoneIndex: layout.zoneIndex }
   })
 
-  const branchConnector = (fromX: number, fromY: number, toX: number, toY: number) =>
-    `M ${fromX} ${fromY} L ${fromX + 20} ${fromY} L ${fromX + 20} ${toY} L ${toX} ${toY}`
-
-  const getSegmentRect = (id: string) => segmentLayout.get(id)
-
-  const branchIds: BranchId[] = ['A', 'B', 'C']
+  const sectionLabels = [
+    ...ZONED_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => ({ id: spec.id, text: spec.label, x: spec.orientation === 'horizontal' ? spec.x + spec.length / 2 : spec.x + 22, y: spec.orientation === 'horizontal' ? spec.y - 24 : spec.y + spec.length / 2, anchor: spec.orientation === 'horizontal' ? 'middle' : 'start', rotate: spec.orientation === 'vertical' })),
+    ...PILES.map((pile) => ({ id: pile.id, text: pile.label, x: pile.x - 25, y: 350, anchor: 'middle', rotate: true })),
+  ]
 
   return (
-    <svg width={width} height={height} role="img" aria-label="Conveyor network">
-      {branchIds.map((branchId) => (
-        <g key={branchId}>
-          <rect x={exchangerX} y={rowYs[branchId] - rectHeight / 2} width={80} height={rectHeight} fill="#dfe7ff" stroke="#4d6cff" />
-          <text x={exchangerX + 40} y={rowYs[branchId] - textOffset} fontSize={12} fill="#000" textAnchor="middle">Exchanger {branchId}</text>
-          <text x={exchangerX + 40} y={rowYs[branchId] - textOffset + 16} fontSize={10} fill="#333" textAnchor="middle">Retrieving: {missionCounts[branchId].retrieving}</text>
-          <text x={exchangerX + 40} y={rowYs[branchId] - textOffset + 28} fontSize={10} fill="#333" textAnchor="middle">Ready: {missionCounts[branchId].ready}</text>
-          <text x={exchangerX + 40} y={rowYs[branchId] - textOffset + 40} fontSize={10} fill="#333" textAnchor="middle">Pending: {missionCounts[branchId].pending}</text>
-        </g>
-      ))}
+    <svg className="conveyor-diagram" data-return-enabled={state.returnSystem.enabled} viewBox={`0 0 ${VIEWBOX.width} ${VIEWBOX.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Complete outbound and return conveyor network">
+      <title>Milestone 8 conveyor network with outbound accumulation and downstream return loop</title>
+      <defs>
+        <pattern id="schematic-grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M 20 0 L 0 0 0 20" fill="none" stroke={COLORS.grid} strokeWidth="1" /></pattern>
+        <marker id="flow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 z" fill={COLORS.connector} /></marker>
+      </defs>
+      <rect width={VIEWBOX.width} height={VIEWBOX.height} fill={COLORS.canvas} />
+      <rect width={VIEWBOX.width} height={VIEWBOX.height} fill="url(#schematic-grid)" opacity={0.7} />
 
-      {Array.from(segmentLayout.entries()).map(([id, layout]) => (
-        <g
-          key={id}
-          data-zone-id={layout.zoneIndex !== undefined ? id : undefined}
-          data-pile-id={layout.pileId}
-          data-conveyor-id={layout.region === 'MDR' ? layout.pileId : undefined}
-          data-region={layout.region}
-          data-zone-index={layout.zoneIndex}
-        >
-          <rect
-            x={layout.x}
-            y={layout.y - layout.h / 2}
-            width={layout.w}
-            height={layout.h}
-            fill={layout.region === 'MDR_UPSTREAM' || layout.region === 'MDR_DOWNSTREAM' ? '#c8e6c9' : layout.region === 'BELT' ? '#90caf9' : layout.region === 'MDR' ? (layout.pileId === 'D' ? '#ffe0b2' : '#ffd54f') : id === 'A1' || id === 'B1' || id === 'C1' || id === 'PRE_T' || id === 'T' || id === 'D' ? 'none' : '#e0e0e0'}
-            stroke="#666"
-          />
-          {layout.zoneIndex === undefined && (
-            <text x={layout.x + layout.w / 2} y={layout.y - layout.h / 2 - 6} fontSize={10} fill="#000" textAnchor="middle">{id}</text>
-          )}
-          {layout.lengthFt > 0 && layout.zoneIndex === undefined && (
-            <text x={layout.x + layout.w / 2} y={layout.y + layout.h / 2 + 12} fontSize={9} fill="#333" textAnchor="middle">
-              {layout.lengthFt} ft
-            </text>
-          )}
-        </g>
-      ))}
+      <g aria-label="Implemented routing connectors">
+        <Connector id="A1-to-PRE_T" from="A1" to="PRE_T" d="M300 218 L300 160 L430 160 L430 90 L450 90" />
+        <Connector id="B1-to-PRE_T" from="B1" to="PRE_T" d="M430 232 L430 90 L450 90" />
+        <Connector id="PRE_T-to-T" from="PRE_T" to="T" d="M610 90 L650 90" />
+        <Connector id="C1-to-T" from="C1" to="T" d="M620 232 L620 150 L640 150 L640 90 L650 90" />
+        <Connector id="T-to-D" from="T" to="D" d="M830 90 L850 90" />
+        <Connector id="T-to-PURGE" from="T" to="PURGE" d="M820 102 L820 150 L806 150 L806 170" />
+        <Connector id="D-to-KORBER" from="D" to="KORBER" d="M1500 90 L1520 90" />
+        <Connector id="KORBER-to-E" from="KORBER" to="E" d="M1550 112 L1550 330 L1460 330" />
+        <Connector id="E-to-X" from="E" to="X" d="M850 330 L806 330 L806 370" />
+        <Connector id="PURGE-to-X" from="PURGE" to="X" d="M806 320 L806 370" />
+        <Connector id="X-to-C2" from="X" to="C2" d="M806 490 L806 520 L620 520 L620 590" />
+        <Connector id="X-to-S" from="X" to="S" d="M794 490 L794 500 L562 500 L562 540" />
+        <Connector id="S-to-A2" from="S" to="A2" d="M488 540 L300 540 L300 590" />
+        <Connector id="S-to-B2" from="S" to="B2" d="M488 540 L430 540 L430 590" />
+        <Connector id="A2-to-A-exchanger" from="A2" to="A_EXCHANGER" d="M300 795 L300 810" />
+        <Connector id="B2-to-B-exchanger" from="B2" to="B_EXCHANGER" d="M430 795 L430 810" />
+        <Connector id="C2-to-C-exchanger" from="C2" to="C_EXCHANGER" d="M620 795 L620 810" />
+      </g>
 
-      {(() => {
-        const paths: ReactElement[] = []
-        const a1 = getSegmentRect('A1')
-        const b1 = getSegmentRect('B1')
-        const c1 = getSegmentRect('C1')
-        const preT = getSegmentRect('PRE_T')
-        const t = getSegmentRect('T')
-        if (a1) paths.push(
-          <path key="A-exch-A1" d={`M ${exchangerX + 80} ${rowYs.A} L ${a1.x} ${rowYs.A}`} stroke="#999" fill="none" strokeWidth={2} />
-        )
-        if (a1 && preT) paths.push(
-          <path key="A1-PRE_T" d={branchConnector(a1.x + a1.w, rowYs.A, preT.x, preT.y)} stroke="#999" fill="none" strokeWidth={2} />
-        )
-        if (b1) paths.push(
-          <path key="B-exch-B1" d={`M ${exchangerX + 80} ${rowYs.B} L ${b1.x} ${rowYs.B}`} stroke="#999" fill="none" strokeWidth={2} />
-        )
-        if (b1 && preT) paths.push(
-          <path key="B1-PRE_T" d={branchConnector(b1.x + b1.w, rowYs.B, preT.x, preT.y)} stroke="#999" fill="none" strokeWidth={2} />
-        )
-        if (c1) paths.push(
-          <path key="C-exch-C1" d={`M ${exchangerX + 80} ${rowYs.C} L ${c1.x} ${rowYs.C}`} stroke="#999" fill="none" strokeWidth={2} />
-        )
-        if (c1 && t) paths.push(
-          <path key="C1-T" d={branchConnector(c1.x + c1.w, rowYs.C, t.x, rowYs.B)} stroke="#999" fill="none" strokeWidth={2} />
-        )
-        if (preT && t) paths.push(
-          <path key="PRE_T-T" d={branchConnector(preT.x + preT.w, preT.y, t.x, t.y)} stroke="#999" fill="none" strokeWidth={2} />
-        )
-        return paths
-      })()}
+      <g aria-label="Conveyor zones" data-conveyor-bounds="S" data-bounds-x="480" data-bounds-y="504" data-bounds-width="90" data-bounds-height="48">
+        {Array.from(layouts.entries()).map(([key, layout]) => {
+          const zoneId = layout.zoneIndex === undefined ? undefined : key
+          const fill = layout.region === 'BELT' ? COLORS.belt : layout.region === 'MDR' ? COLORS.conveyor : '#d2dde2'
+          return <g key={key} data-zone-id={zoneId} data-conveyor-id={layout.conveyorId} data-region={layout.region} data-zone-index={layout.zoneIndex}>
+            <rect x={layout.x} y={layout.y} width={layout.w} height={layout.h} fill={fill} stroke={layout.region === 'BELT' ? COLORS.beltEdge : COLORS.conveyorEdge} strokeWidth={layout.region === 'BELT' ? 2 : 1} />
+          </g>
+        })}
+      </g>
 
-      <text x={500} y={285} fontSize={11} fill="#111">
-        Slug cursor: {state.slugCursor} | Active: {state.activeSlug?.source ?? 'NONE'} | Authorized: {state.activeSlug?.authorizedCount ?? 0} | Released: {state.activeSlug?.releasedCount ?? 0} | Entered T: {state.activeSlug?.enteredTCount ?? 0}
-      </text>
-      <text x={500} y={302} fontSize={11} fill="#111">
-        D entrance: {state.dEntranceAvailable ? 'AVAILABLE' : 'BLOCKED'} | D final: {state.dFinalZoneOccupied ? 'OCCUPIED' : 'EMPTY'} | Körber: {state.korber.starved ? 'STARVED' : state.korber.ready ? 'READY' : 'WAITING'}
-      </text>
+      <g aria-label="Section labels">
+        {sectionLabels.map((label) => <text key={label.id} data-section-label={label.id} x={label.x} y={label.y} textAnchor={label.anchor as 'middle' | 'start'} transform={label.rotate ? `rotate(-90 ${label.x} ${label.y})` : undefined} fill={COLORS.text} fontSize={12} fontWeight={700}>{label.text}</text>)}
+        <text x={805} y={516} textAnchor="middle" fill={COLORS.text} fontSize={11} fontWeight={700}>RETURN SORTER</text>
+        <text x={1518} y={57} fill={COLORS.text} fontSize={10}>FLOW →</text>
+      </g>
 
-      {state.returnSystem.enabled && (
-        <g>
-          <path d="M 784 140 L 784 290 L 620 290" stroke="#777" fill="none" />
-          <path d="M 1096 140 L 1110 140 L 1110 250 L 90 250 L 90 334" stroke="#777" fill="none" />
-          <path d="M 106 350 L 120 350" stroke="#777" fill="none" />
-          <path d="M 470 350 L 500 350 M 740 290 L 480 290 L 480 350" stroke="#777" fill="none" />
-          <path d="M 600 350 L 630 350 L 630 290 L 770 290 M 630 350 L 630 390 L 650 390" stroke="#777" fill="none" />
-          <path d="M 770 390 L 785 390 L 785 370 L 800 370 M 785 390 L 785 450 L 800 450" stroke="#777" fill="none" />
-          <rect x={70} y={334} width={36} height={32} fill="#ce93d8" stroke="#6a1b9a" />
-          <text x={88} y={329} fontSize={10} textAnchor="middle">Körber</text>
-          <text x={620} y={337} fontSize={10}>RETURN SORTER</text>
-          <text x={500} y={485} fontSize={11}>
-            Purge: {state.returnSystem.activePurgeBatch?.enteredPurgeCount ?? 0}/6 | Held: {state.returnSystem.korberHeldTrayId ?? 'NONE'} | Sorter: {state.returnSystem.sorterCursor} | Returned: {state.returnSystem.returnedToAsrsCount}
-          </text>
-        </g>
-      )}
+      <Equipment id="KORBER" x={1520} y={73} width={70}>KÖRBER</Equipment>
+      <Equipment id="A_EXCHANGER" x={250} y={810} width={100}>A EXCHANGER</Equipment>
+      <Equipment id="B_EXCHANGER" x={380} y={810} width={100}>B EXCHANGER</Equipment>
+      <Equipment id="C_EXCHANGER" x={570} y={810} width={100}>C EXCHANGER</Equipment>
 
-      {trayPositions.map((tp) => (
-        (() => {
-          const tray = trays.find((candidate) => candidate.id === tp.id)!
-          const destinationColor = tray.returnDestination === 'A2' ? '#c62828' : tray.returnDestination === 'B2' ? '#6a1b9a' : tray.returnDestination === 'C2' ? '#2e7d32' : '#333'
-          return <g key={tp.id} data-tray-id={tp.id} data-segment-id={tp.segId} data-zone-index={tp.zoneIndex} data-load-state={tray.loadState ?? 'EMPTY'} data-return-destination={tray.returnDestination} data-purge-member={tray.purgeMember || undefined}>
-          <circle cx={tp.cx} cy={tp.cy} r={8} fill={tray.korberHeld ? '#ab47bc' : tray.loadState === 'FULL' ? '#ef6c00' : '#1976d2'} stroke={destinationColor} strokeWidth={tray.returnDestination ? 2 : 0} />
-          {tp.segId !== 'D' && <text x={tp.cx} y={tp.cy + 20} fontSize={10} fill="#000" textAnchor="middle">{tp.id}</text>}
-        </g>
-        })()
-      ))}
+      <g aria-label="Junctions">
+        {[[430, 90, 'AB-merge'], [640, 90, 'T-merge'], [820, 90, 'T-diverter'], [806, 330, 'return-merge'], [806, 520, 'return-sorter'], [480, 540, 'S-diverter']].map(([x, y, id]) => <rect key={String(id)} data-junction-id={id} x={Number(x) - 5} y={Number(y) - 5} width={10} height={10} transform={`rotate(45 ${x} ${y})`} fill="#f8fafb" stroke={COLORS.connector} strokeWidth={2} />)}
+      </g>
+
+      <g aria-label="Trays">
+        {trayPositions.map(({ tray, x, y, width, orientation, segment, zoneIndex }) => {
+          const accent = tray.returnDestination ? COLORS[tray.returnDestination] : COLORS.text
+          const fill = tray.korberHeld ? COLORS.held : tray.loadState === 'FULL' ? COLORS.full : COLORS.empty
+          const label = String(tray.id).slice(-3)
+          const showLabel = width >= 12 && segment !== 'D'
+          return <g key={tray.id} data-tray-id={tray.id} data-segment-id={segment} data-zone-index={zoneIndex} data-load-state={tray.loadState ?? 'EMPTY'} data-return-destination={tray.returnDestination} data-purge-member={tray.purgeMember || undefined}>
+            <title>{`Tray ${tray.id} · ${tray.loadState ?? 'EMPTY'}${tray.returnDestination ? ` · ${tray.returnDestination}` : ''}${tray.purgeMember ? ' · PURGE MEMBER' : ''}${tray.korberHeld ? ' · HELD AT KÖRBER' : ''}`}</title>
+            {orientation === 'vertical'
+              ? <rect x={x - 7} y={y - 5} width={14} height={10} rx={2} fill={fill} stroke={tray.purgeMember ? COLORS.purge : accent} strokeWidth={tray.purgeMember ? 3 : tray.returnDestination ? 2 : 1} />
+              : <rect x={x - 6} y={y - 7} width={12} height={14} rx={2} fill={fill} stroke={tray.purgeMember ? COLORS.purge : accent} strokeWidth={tray.purgeMember ? 3 : tray.returnDestination ? 2 : 1} />}
+            {showLabel && <text x={x} y={y + 3} textAnchor="middle" fill="white" fontSize={7} fontWeight={700}>{label}</text>}
+          </g>
+        })}
+      </g>
+
+      <g data-legend="tray-and-conveyor-states" transform="translate(930 760)">
+        <rect x={0} y={0} width={610} height={70} rx={5} fill="rgba(255,255,255,.92)" stroke="#aab7c0" />
+        {[['EMPTY', COLORS.empty, 18], ['FULL', COLORS.full, 105], ['PURGE MEMBER', COLORS.empty, 180], ['KÖRBER HOLD', COLORS.held, 315]].map(([label, color, x], index) => <g key={String(label)} transform={`translate(${x} 20)`}><rect width={14} height={14} rx={2} fill={String(color)} stroke={index === 2 ? COLORS.purge : COLORS.text} strokeWidth={index === 2 ? 3 : 1} /><text x={20} y={11} fontSize={10} fill={COLORS.text}>{label}</text></g>)}
+        <g transform="translate(445 20)"><rect width={22} height={14} fill={COLORS.conveyor} stroke={COLORS.conveyorEdge} /><text x={28} y={11} fontSize={10} fill={COLORS.text}>MDR</text></g>
+        <g transform="translate(520 20)"><rect width={22} height={14} fill={COLORS.belt} stroke={COLORS.beltEdge} strokeWidth={2} /><text x={28} y={11} fontSize={10} fill={COLORS.text}>BELT</text></g>
+        <text x={18} y={55} fontSize={9} fill={COLORS.muted}>Destination accents: <tspan fill={COLORS.A2}>A2</tspan> · <tspan fill={COLORS.B2}>B2</tspan> · <tspan fill={COLORS.C2}>C2</tspan></text>
+      </g>
     </svg>
   )
 }
