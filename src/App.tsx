@@ -3,7 +3,7 @@ import './App.css'
 import SimulationControls from './components/SimulationControls'
 import ConveyorDiagram from './visualization/ConveyorDiagram'
 import SimulationEngine from './simulation/SimulationEngine'
-import { applyOperatingSettingChange, applyPlanningCadenceChange } from './operatingSettings'
+import { applyOperatingSettingChange, applyPlanningCadenceChange, applyStartScenario } from './operatingSettings'
 import type { SimulationStateWithProgress } from './simulation/types'
 import type { OperatingSettings } from './simulation/types'
 
@@ -87,6 +87,17 @@ function App() {
     applyPlanningCadenceChange(engineRef.current, seconds, () => setPlaying(false), setState, setConfigurationNotice)
   }
 
+  function handleStartScenario() {
+    applyStartScenario(
+      engineRef.current,
+      state.operatingSettings,
+      state.srsControl.planningCadenceSec,
+      () => setPlaying(false),
+      setState,
+      setConfigurationNotice,
+    )
+  }
+
   return (
     <main className={`simulation-app ${panelCollapsed ? 'panel-collapsed' : ''}`}>
       <section className="schematic-workspace" aria-label="Conveyor schematic workspace">
@@ -111,6 +122,7 @@ function App() {
         onPlayPause={handlePlayPause}
         onStep={handleStep}
         onReset={handleReset}
+        onStartScenario={handleStartScenario}
         onOperatingSettingChange={handleOperatingSetting}
         onPlanningCadenceChange={handlePlanningCadence}
         configurationNotice={configurationNotice}

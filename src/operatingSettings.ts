@@ -28,3 +28,17 @@ export function applyPlanningCadenceChange(
   publishState(engine.getState())
   publishNotice('Simulation paused after planning cadence change')
 }
+
+export function applyStartScenario(
+  engine: SimulationEngine,
+  settings: OperatingSettings,
+  planningCadenceSec: number,
+  pause: () => void,
+  publishState: (state: SimulationStateWithProgress) => void,
+  publishNotice: (notice: string) => void,
+) {
+  pause()
+  engine.startScenario(settings, planningCadenceSec)
+  publishState(engine.getState())
+  publishNotice('Scenario started from selected settings')
+}

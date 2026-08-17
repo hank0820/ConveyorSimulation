@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
-import { applyOperatingSettingChange, applyPlanningCadenceChange } from './operatingSettings'
+import { applyOperatingSettingChange, applyPlanningCadenceChange, applyStartScenario } from './operatingSettings'
 import SimulationEngine from './simulation/SimulationEngine'
 
 const SEGMENTS = [
@@ -53,5 +53,21 @@ describe('Milestone 9 application configuration', () => {
     expect(() => applyPlanningCadenceChange(engine, cadence, pause, vi.fn(), vi.fn())).toThrow(/positive finite/)
     expect(pause).not.toHaveBeenCalled()
     expect(engine.getState()).toEqual(before)
+  })
+
+  test('Start Scenario pauses and cleanly applies the selected settings and cadence', () => {
+    const engine = new SimulationEngine(SEGMENTS)
+    engine.step(25)
+    const pause = vi.fn()
+    const publishState = vi.fn()
+    const publishNotice = vi.fn()
+    applyStartScenario(engine, { korberEnabled: true, cartbuildAEnabled: true, cartbuildBEnabled: false, cartbuildCEnabled: false }, 6, pause, publishState, publishNotice)
+    const state = publishState.mock.calls[0][0]
+    expect(pause).toHaveBeenCalledOnce()
+    expect(state).toMatchObject({ timeSec: 0, operatingSettings: { korberEnabled: true, cartbuildAEnabled: true, cartbuildBEnabled: false, cartbuildCEnabled: false } })
+    expect(state.srsControl).toMatchObject({ planningCadenceSec: 6, nextPlanningTime: 6 })
+    expect(state.materialBalanceError).toBe(0)
+    expect(state.cartbuildSystem.cartonBalanceError).toBe(0)
+    expect(publishNotice).toHaveBeenCalledWith('Scenario started from selected settings')
   })
 })

@@ -114,6 +114,15 @@ export default class Milestone7Simulation {
   }
 
   reset() {
+    this.initialize(DEFAULT_SETTINGS(), DEFAULT_PLANNING_CADENCE_SEC)
+  }
+
+  startScenario(settings: OperatingSettings, planningCadenceSec: number) {
+    if (!Number.isFinite(planningCadenceSec) || planningCadenceSec <= 0) throw new Error('PendingDemand planning cadence must be a positive finite number')
+    this.initialize(settings, planningCadenceSec)
+  }
+
+  private initialize(settings: OperatingSettings, planningCadenceSec: number) {
     this.timeSec = 0
     this.trays = []
     this.totalTraysCreated = 0
@@ -121,7 +130,7 @@ export default class Milestone7Simulation {
     this.missions = []
     this.missionCounter = 0
     this.asrsNextAssign = 'A'
-    this.planningCadenceSec = DEFAULT_PLANNING_CADENCE_SEC
+    this.planningCadenceSec = planningCadenceSec
     this.nextPlanningTime = 0
     this.asrsAssigned = { A: 0, B: 0, C: 0 }
     this.asrsLastRelease = { A: -1e9, B: -1e9, C: -1e9 }
@@ -144,7 +153,7 @@ export default class Milestone7Simulation {
     this.returnAssignments = { A2: { EMPTY: 0, FULL: 0 }, B2: { EMPTY: 0, FULL: 0 }, C2: { EMPTY: 0, FULL: 0 } }
     this.returnMergeCounts = { eToXFull: 0, purgeToXEmpty: 0, blockedE: 0, blockedPurge: 0 }
     this.exchangerAcceptanceTimes = { A2: [], B2: [], C2: [] }
-    this.operatingSettings = DEFAULT_SETTINGS()
+    this.operatingSettings = { ...settings }
     this.cartons = []
     this.cartonMarkerCounter = 0
     this.cartonIntroduced = { A: 0, B: 0, C: 0 }

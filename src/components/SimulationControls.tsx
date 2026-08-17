@@ -9,6 +9,7 @@ interface Props {
   onPlayPause: () => void
   onStep: () => void
   onReset: () => void
+  onStartScenario: () => void
   onOperatingSettingChange: (setting: keyof OperatingSettings, enabled: boolean) => void
   onPlanningCadenceChange: (seconds: number) => void
   configurationNotice: string | null
@@ -29,7 +30,7 @@ const EnablementToggle = ({ label, setting, enabled, onChange }: { label: string
 )
 
 const SimulationControls: FC<Props> = ({
-  state, playing, playbackSpeed, setPlaybackSpeed, onPlayPause, onStep, onReset, onOperatingSettingChange, onPlanningCadenceChange, configurationNotice, collapsed, onToggleCollapsed,
+  state, playing, playbackSpeed, setPlaybackSpeed, onPlayPause, onStep, onReset, onStartScenario, onOperatingSettingChange, onPlanningCadenceChange, configurationNotice, collapsed, onToggleCollapsed,
 }) => {
   const purge = state.returnSystem.activePurgeBatch
   const frozenIds = purge?.authorizedTrayIds ?? state.returnSystem.lastCompletedPurgeBatch?.authorizedTrayIds ?? []
@@ -51,6 +52,7 @@ const SimulationControls: FC<Props> = ({
             <EnablementToggle label="Cartbuild B" setting="cartbuildBEnabled" enabled={state.operatingSettings.cartbuildBEnabled} onChange={onOperatingSettingChange} />
             <EnablementToggle label="Cartbuild C" setting="cartbuildCEnabled" enabled={state.operatingSettings.cartbuildCEnabled} onChange={onOperatingSettingChange} />
           </div>
+          <button className="start-scenario-button" type="button" onClick={onStartScenario}>Start Scenario</button>
           {configurationNotice && <p className="configuration-notice" role="status">{configurationNotice}</p>}
         </section>
 

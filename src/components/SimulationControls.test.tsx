@@ -14,7 +14,7 @@ describe('SimulationControls panel', () => {
     engine.step(12.3)
     const state = engine.getState()
     const frozen = JSON.stringify(state)
-    const common = { state, playing: true, playbackSpeed: 20, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, onToggleCollapsed: vi.fn() }
+    const common = { state, playing: true, playbackSpeed: 20, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onStartScenario: vi.fn(), onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, onToggleCollapsed: vi.fn() }
     const expanded = renderToStaticMarkup(createElement(SimulationControls, { ...common, collapsed: false }))
     const collapsed = renderToStaticMarkup(createElement(SimulationControls, { ...common, collapsed: true }))
     expect(expanded).toContain('data-panel-state="expanded"')
@@ -31,10 +31,11 @@ describe('SimulationControls panel', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const state = engine.getState()
     const markup = renderToStaticMarkup(createElement(SimulationControls, {
-      state, playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(),
+      state, playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onStartScenario: vi.fn(),
       onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: 'Simulation paused after configuration change', collapsed: false, onToggleCollapsed: vi.fn(),
     }))
     expect(markup).toContain('Process enablement')
+    expect(markup).toContain('>Start Scenario</button>')
     for (const label of ['Körber', 'Cartbuild A', 'Cartbuild B', 'Cartbuild C']) expect(markup).toContain(label)
     expect((markup.match(/type="checkbox" checked=""/g) ?? [])).toHaveLength(4)
     expect((markup.match(/class="toggle-state">ON/g) ?? [])).toHaveLength(4)
@@ -48,7 +49,7 @@ describe('SimulationControls panel', () => {
       { id: 'CARTBUILD_C', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
     ]).getState()
     const markup = renderToStaticMarkup(createElement(SimulationControls, {
-      state, playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(),
+      state, playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onStartScenario: vi.fn(),
       onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, collapsed: false, onToggleCollapsed: vi.fn(),
     }))
     expect(markup).toContain('SRS demand control')

@@ -186,6 +186,11 @@ export class SimulationEngine {
     else if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('PendingDemand planning cadence must be a positive finite number')
   }
 
+  startScenario(settings: OperatingSettings, planningCadenceSec: number) {
+    if (!this.milestone7) throw new Error('Scenario startup requires the Milestone 7+ topology')
+    this.milestone7.startScenario(settings, planningCadenceSec)
+  }
+
   private tryInjectSources() {
     // Milestone 5 replaces periodic test sources with ASRS/exchanger missions.
     // For backwards compatibility, enable legacy periodic source injection when topology

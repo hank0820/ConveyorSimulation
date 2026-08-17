@@ -195,6 +195,18 @@
 .enablement-toggle.disabled { color: #7b3434; border-color: #c9a0a0; background: #f7eaea; }
 .enablement-toggle:focus-within { outline: 2px solid #246b8b; outline-offset: 1px; }
 .configuration-notice { margin: 8px 0 0; color: #435d6d; font-size: 10px; font-weight: 700; }
+.start-scenario-button {
+  width: 100%;
+  min-height: 32px;
+  margin-top: 8px;
+  border: 1px solid #1c5b77;
+  border-radius: 4px;
+  background: #246b8b;
+  color: white;
+  font: 700 11px var(--sans);
+  cursor: pointer;
+}
+.start-scenario-button:hover { background: #1c5b77; }
 .detail-grid { margin: 7px 0 2px; padding-left: 8px; border-left: 2px solid #d7e0e5; }
 .cadence-control {
   display: flex;
