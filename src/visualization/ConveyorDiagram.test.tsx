@@ -24,6 +24,13 @@ const RETURN_SEGMENTS = [
   { id: 'C2', lengthFt: 72.5, speedFtPerMin: 120, maxOccupancy: 29 },
 ]
 
+const CARTBUILD_SEGMENTS = [
+  ...RETURN_SEGMENTS,
+  { id: 'CARTBUILD_A', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
+  { id: 'CARTBUILD_B', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
+  { id: 'CARTBUILD_C', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
+]
+
 function createEngine() {
   const engine = new SimulationEngine(SEGMENTS)
   engine.reset()
@@ -218,5 +225,58 @@ describe('ConveyorDiagram rendering integrity', () => {
       expect(x + width).toBeLessThanOrEqual(1600)
       expect(y + height).toBeLessThanOrEqual(850)
     }
+  })
+
+  test('renders three 30-zone cartbuild lanes, detrayers, operators, and additive semantic connectors', () => {
+    const markup = renderEngine(new SimulationEngine(CARTBUILD_SEGMENTS))
+    const zoneIds = attributeValues(markup, 'data-zone-id')
+    for (const source of ['A', 'B', 'C']) {
+      expect(zoneIds.filter((id) => id.startsWith(`CARTBUILD_${source}:MDR:`))).toHaveLength(30)
+      expect(markup).toContain(`data-detrayer-id="DETRAYER_${source}"`)
+      expect(markup).toContain(`data-equipment-id="OPERATOR_${source}"`)
+      expect(markup).toContain(`CARTBUILD ${source} · 30 zones`)
+      expect(markup).toContain(`DETRAYER ${source}`)
+      expect(markup).toContain(`OPERATOR ${source}`)
+      expect(markup).toContain(`data-connector-id="DETRAYER-${source}-to-CARTBUILD-${source}"`)
+      expect(markup).toContain(`data-connector-id="CARTBUILD-${source}-to-OPERATOR-${source}"`)
+    }
+    for (const legacy of ['A1-to-PRE_T', 'T-to-D', 'KORBER-to-E', 'X-to-C2', 'X-to-S', 'S-to-A2', 'S-to-B2']) {
+      expect(markup).toContain(`data-connector-id="${legacy}"`)
+    }
+    const connectorIds = attributeValues(markup, 'data-connector-id')
+    expect(new Set(connectorIds).size).toBe(connectorIds.length)
+    expect(attributeValues(markup, 'data-flow-from')).toHaveLength(connectorIds.length)
+    expect(attributeValues(markup, 'data-flow-to')).toHaveLength(connectorIds.length)
+    for (const match of markup.matchAll(/<rect[^>]* x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)"/g)) {
+      const [, x, y, width, height] = match.map(Number)
+      expect(x).toBeGreaterThanOrEqual(0)
+      expect(y).toBeGreaterThanOrEqual(0)
+      expect(x + width).toBeLessThanOrEqual(1600)
+      expect(y + height).toBeLessThanOrEqual(850)
+    }
+  })
+
+  test('renders one attached carton on a loaded tray and one semantic marker per lane carton without business IDs', () => {
+    const engine = new SimulationEngine(CARTBUILD_SEGMENTS)
+    const runtime = (engine as unknown as { milestone7: { trays: ReturnType<SimulationEngine['getState']>['trays']; cartons: Array<{ internalKey: number; laneId: 'CARTBUILD_A' | 'CARTBUILD_B' | 'CARTBUILD_C'; zoneIndex: number }>; totalTraysCreated: number; cartonIntroduced: { A: number; B: number; C: number } } }).milestone7
+    const tray = runtime.trays[0]
+    tray.loadState = 'FULL'
+    tray.payloadOrigin = 'CARTBUILD'
+    tray.cartbuildCartonAttached = true
+    runtime.cartons = [
+      { internalKey: 901, laneId: 'CARTBUILD_A', zoneIndex: 0 },
+      { internalKey: 902, laneId: 'CARTBUILD_B', zoneIndex: 14 },
+      { internalKey: 903, laneId: 'CARTBUILD_C', zoneIndex: 29 },
+    ]
+    runtime.cartonIntroduced = { A: 2, B: 1, C: 1 }
+    const markup = renderEngine(engine)
+    expect(attributeValues(markup, 'data-attached-carton')).toEqual(['true'])
+    expect(attributeValues(markup, 'data-carton-marker')).toHaveLength(3)
+    expect(attributeValues(markup, 'data-cartbuild-lane').filter((value) => value.startsWith('CARTBUILD_')).length).toBeGreaterThanOrEqual(93)
+    expect(markup).toContain('data-payload-origin="CARTBUILD"')
+    expect(markup).toContain('data-carton-state="ON_CONVEYOR"')
+    expect(markup).not.toContain('data-carton-id')
+    expect(new Set(attributeValues(markup, 'data-tray-id')).size).toBe(attributeValues(markup, 'data-tray-id').length)
+    expect(new Set(attributeValues(markup, 'data-zone-id')).size).toBe(attributeValues(markup, 'data-zone-id').length - 3)
   })
 })

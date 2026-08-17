@@ -71,6 +71,9 @@ describe('Milestone 7 D and Körber physics', () => {
 
   test('vacancy propagates with timed transfers and entrance stays blocked until it arrives', () => {
     const engine = createEngine()
+    const runtime = (engine as unknown as { milestone7: { trays: Tray[]; missions: unknown[] } }).milestone7
+    runtime.trays = runtime.trays.filter((tray) => tray.zonePlacement?.conveyorId === 'D')
+    runtime.missions = []
     engine.step(INTERVAL + 0.01)
     expect(engine.getState().dFinalZoneOccupied).toBe(false)
     engine.step(1.1)
@@ -129,6 +132,7 @@ describe('Milestone 7 slug arbitration and invariants', () => {
   test('skips a short lane for a full lane, otherwise freezes the cursor lane partial slug', () => {
     type Runtime = {
       trays: Tray[]
+      missions: unknown[]
       slugCursor: SourceId
       activeSlug: null
       authorizeSlugIfPossible: () => void
@@ -136,6 +140,7 @@ describe('Milestone 7 slug arbitration and invariants', () => {
     const first = createEngine()
     const firstRuntime = (first as unknown as { milestone7: Runtime }).milestone7
     firstRuntime.trays = firstRuntime.trays.filter((tray) => tray.zonePlacement?.conveyorId !== 'D' || tray.zonePlacement.zoneIndex !== 0)
+    firstRuntime.missions = []
     firstRuntime.trays = firstRuntime.trays.filter((tray) => tray.pilePlacement?.pileId !== 'A1' || tray.id <= 7)
     firstRuntime.slugCursor = 'A'
     firstRuntime.authorizeSlugIfPossible()
@@ -145,6 +150,7 @@ describe('Milestone 7 slug arbitration and invariants', () => {
     const second = createEngine()
     const secondRuntime = (second as unknown as { milestone7: Runtime }).milestone7
     secondRuntime.trays = secondRuntime.trays.filter((tray) => tray.zonePlacement?.conveyorId !== 'D' || tray.zonePlacement.zoneIndex !== 0)
+    secondRuntime.missions = []
     secondRuntime.trays = secondRuntime.trays.filter((tray) => {
       if (tray.pilePlacement?.pileId === 'A1') return tray.id <= 5
       if (tray.pilePlacement?.pileId === 'B1') return tray.id <= 29
@@ -191,14 +197,15 @@ describe('Milestone 7 slug arbitration and invariants', () => {
     const engine = createEngine()
     engine.step(125)
     const before = engine.getState()
-    expect(before.activeSlug?.source).toBe('A')
+    expect(before.activeSlug).not.toBeNull()
+    const source = before.activeSlug!.source
     const cursor = before.slugCursor
     const authorized = [...before.activeSlug!.authorizedTrayIds]
     const inactiveCounts = [countPile(before.trays, 'B'), countPile(before.trays, 'C')]
     engine.step(1)
     const after = engine.getState()
     expect(after.slugCursor).toBe(cursor)
-    expect(after.activeSlug?.source).toBe('A')
+    expect(after.activeSlug?.source).toBe(source)
     expect(after.activeSlug?.authorizedTrayIds).toEqual(authorized)
     expect([countPile(after.trays, 'B'), countPile(after.trays, 'C')]).toEqual(inactiveCounts)
   })

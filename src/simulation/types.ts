@@ -1,6 +1,8 @@
 export type TrayStatus = 'MOVING' | 'BLOCKED'
 export type TrayLoadState = 'EMPTY' | 'FULL'
+export type TrayPayloadOrigin = 'CARTBUILD' | 'KORBER'
 export type ReturnDestination = 'A2' | 'B2' | 'C2'
+export type CartbuildLaneId = 'CARTBUILD_A' | 'CARTBUILD_B' | 'CARTBUILD_C'
 export type ZonedConveyorId = 'PRE_T' | 'T' | 'D' | 'PURGE' | 'E' | 'X' | 'S' | 'A2' | 'B2' | 'C2'
 
 export type SourceId = 'A' | 'B' | 'C'
@@ -13,6 +15,8 @@ export interface Tray {
   createdAtSec: number
   originSourceId: SourceId
   loadState?: TrayLoadState
+  payloadOrigin?: TrayPayloadOrigin
+  cartbuildCartonAttached?: boolean
   returnDestination?: ReturnDestination
   purgeMember?: boolean
   korberHeld?: boolean
@@ -32,6 +36,77 @@ export interface Tray {
     conveyorId: ZonedConveyorId
     zoneIndex: number
   }
+}
+
+export interface OperatingSettings {
+  korberEnabled: boolean
+  cartbuildAEnabled: boolean
+  cartbuildBEnabled: boolean
+  cartbuildCEnabled: boolean
+}
+
+export interface CartonMarker {
+  internalKey: number
+  laneId: CartbuildLaneId
+  zoneIndex: number
+  transferRemainingSec?: number
+}
+
+export interface ExchangerOutboundDiagnostic {
+  source: SourceId
+  cartbuildEnabled: boolean
+  lastActualReleaseTime: number | null
+  nextEligibleReleaseTime: number
+  loadedReleases: number
+  emptyReleases: number
+  blockedLoadedAttempts: number
+  blockedEmptyAttempts: number
+  pendingEmptyMissions: number
+  mostRecentReleaseType: 'LOADED' | 'EMPTY' | null
+  releaseTimes: Array<{ timeSec: number; type: 'LOADED' | 'EMPTY'; trayId: number }>
+}
+
+export interface DetrayerDiagnostic {
+  source: SourceId
+  loadedTrayWaiting: boolean
+  trayId: number | null
+  zone3Available: boolean
+  cartonLaneZone0Available: boolean
+  splitCount: number
+  blockedTicks: number
+  blockedDurationSec: number
+  mostRecentSplitTime: number | null
+}
+
+export interface CartbuildLaneState {
+  id: CartbuildLaneId
+  enabled: boolean
+  lengthFt: number
+  zoneCount: number
+  speedFtPerMin: number
+  zoneTransferSec: number
+  markers: CartonMarker[]
+  occupancy: number
+  introducedCount: number
+  operatorConsumedCount: number
+  operatorConsumptionTimes: number[]
+  finalZoneOccupied: boolean
+  nextEligibleConsumptionTime: number
+  lastConsumedTime: number | null
+  configuredRatePerHour: number
+}
+
+export interface CartbuildSystemState {
+  enabled: boolean
+  settings: OperatingSettings
+  lanes: Record<CartbuildLaneId, CartbuildLaneState>
+  exchangers: Record<SourceId, ExchangerOutboundDiagnostic>
+  detrayers: Record<SourceId, DetrayerDiagnostic>
+  cartbuildCartonsIntroduced: number
+  cartbuildCartonsAttachedToTrays: number
+  cartbuildCartonsOnConveyors: number
+  cartbuildCartonsConsumedByOperators: number
+  cartonBalanceError: number
 }
 
 export interface ActiveSlugState {
@@ -75,13 +150,58 @@ export interface SourceState {
 }
 
 export type MissionState = 'RETRIEVING' | 'READY_AT_EXCHANGER' | 'RELEASED'
+export type MissionType = 'EMPTY' | 'CARTBUILD'
 
 export interface Mission {
   missionId: number
   assignedExchanger: SourceId
+  missionType: MissionType
   createdAtSec: number
   readyAtSec: number
   state: MissionState
+}
+
+export type SrsPileId = 'A1' | 'B1' | 'C1' | 'T' | 'D' | 'A2' | 'B2' | 'C2'
+
+export interface SrsLaneDiagnostic {
+  source: SourceId
+  targetSize: number
+  currentCount: number
+  pendingDemand: number
+  lanePurgeDemand: number
+  localAvailable: number
+  downstreamAvailable: number
+  laneMissionCapacity: number
+  pendingEmptyMissions: number
+  pendingCartbuildMissions: number
+  maturedEmptyMissions: number
+  maturedCartbuildMissions: number
+  lastActualExchangerReleaseTime: number | null
+  nextEligibleExchangerReleaseTime: number
+  activeSourceBatch: boolean
+  frozenSourceBatchQuantity: number
+  sourceBatchReleasedCount: number
+  sourceBatchRemainingCount: number
+}
+
+export interface SrsControlState {
+  targets: Record<SrsPileId, number>
+  current: Record<SrsPileId, number>
+  globalTarget: number
+  globalCurrent: number
+  globalPending: number
+  globalAvailableCapacity: number
+  planningCadenceSec: number
+  nextPlanningTime: number
+  planningCursor: SourceId
+  lanes: Record<SourceId, SrsLaneDiagnostic>
+  tBypassBatch: {
+    active: boolean
+    authorizedTrayIds: number[]
+    enteredCount: number
+    remainingCount: number
+    sourceBatchPaused: boolean
+  }
 }
 
 export interface MergeState {
@@ -208,6 +328,9 @@ export interface SimulationState {
   pileAuthorizedExitC: boolean
   beltDiagnostics: BeltDiagnostic[]
   returnSystem: ReturnSystemState
+  operatingSettings: OperatingSettings
+  cartbuildSystem: CartbuildSystemState
+  srsControl: SrsControlState
   slugCursor: SourceId
   activeSlug: ActiveSlugState | null
   lastCompletedSlug: ActiveSlugState | null

@@ -3,7 +3,9 @@ import './App.css'
 import SimulationControls from './components/SimulationControls'
 import ConveyorDiagram from './visualization/ConveyorDiagram'
 import SimulationEngine from './simulation/SimulationEngine'
+import { applyOperatingSettingChange, applyPlanningCadenceChange, applyStartScenario } from './operatingSettings'
 import type { SimulationStateWithProgress } from './simulation/types'
+import type { OperatingSettings } from './simulation/types'
 
 const SEGMENTS = [
   { id: 'A1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 24 },
@@ -19,6 +21,9 @@ const SEGMENTS = [
   { id: 'A2', lengthFt: 90, speedFtPerMin: 120, maxOccupancy: 36 },
   { id: 'B2', lengthFt: 72.5, speedFtPerMin: 120, maxOccupancy: 29 },
   { id: 'C2', lengthFt: 72.5, speedFtPerMin: 120, maxOccupancy: 29 },
+  { id: 'CARTBUILD_A', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
+  { id: 'CARTBUILD_B', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
+  { id: 'CARTBUILD_C', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
 ]
 
 function App() {
@@ -27,6 +32,7 @@ function App() {
   const [playing, setPlaying] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
+  const [configurationNotice, setConfigurationNotice] = useState<string | null>(null)
 
   // animation loop
   useEffect(() => {
@@ -70,6 +76,26 @@ function App() {
     const s = engine.getState()
     setState(s)
     setPlaying(false)
+    setConfigurationNotice(null)
+  }
+
+  function handleOperatingSetting(setting: keyof OperatingSettings, enabled: boolean) {
+    applyOperatingSettingChange(engineRef.current, setting, enabled, () => setPlaying(false), setState, setConfigurationNotice)
+  }
+
+  function handlePlanningCadence(seconds: number) {
+    applyPlanningCadenceChange(engineRef.current, seconds, () => setPlaying(false), setState, setConfigurationNotice)
+  }
+
+  function handleStartScenario() {
+    applyStartScenario(
+      engineRef.current,
+      state.operatingSettings,
+      state.srsControl.planningCadenceSec,
+      () => setPlaying(false),
+      setState,
+      setConfigurationNotice,
+    )
   }
 
   return (
@@ -96,6 +122,10 @@ function App() {
         onPlayPause={handlePlayPause}
         onStep={handleStep}
         onReset={handleReset}
+        onStartScenario={handleStartScenario}
+        onOperatingSettingChange={handleOperatingSetting}
+        onPlanningCadenceChange={handlePlanningCadence}
+        configurationNotice={configurationNotice}
         collapsed={panelCollapsed}
         onToggleCollapsed={() => setPanelCollapsed((collapsed) => !collapsed)}
       />

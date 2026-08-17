@@ -1,5 +1,5 @@
 import type { FC, ReactNode } from 'react'
-import type { ConveyorSegmentConfig, SimulationStateWithProgress, Tray, ZonedConveyorId } from '../simulation/types'
+import type { CartbuildLaneId, ConveyorSegmentConfig, SimulationStateWithProgress, Tray, ZonedConveyorId } from '../simulation/types'
 
 interface Props { segments: ConveyorSegmentConfig[]; trays: Tray[]; state: SimulationStateWithProgress }
 type Orientation = 'horizontal' | 'vertical'
@@ -32,6 +32,12 @@ const PILES = [
   { id: 'C1', x: 620, upstream: 8, beltFt: 43.5, beltHeight: 120, downstream: 7, label: 'C1 · 16' },
 ] as const
 
+const CARTBUILD_SPECS: Array<{ id: CartbuildLaneId; source: 'A' | 'B' | 'C'; x: number; y: number; length: number; label: string }> = [
+  { id: 'CARTBUILD_A', source: 'A', x: 335, y: 235, length: 225, label: 'CARTBUILD A · 30 zones' },
+  { id: 'CARTBUILD_B', source: 'B', x: 465, y: 235, length: 225, label: 'CARTBUILD B · 30 zones' },
+  { id: 'CARTBUILD_C', source: 'C', x: 655, y: 235, length: 225, label: 'CARTBUILD C · 30 zones' },
+]
+
 const Connector = ({ id, from, to, d }: { id: string; from: string; to: string; d: string }) => (
   <path data-connector-id={id} data-flow-from={from} data-flow-to={to} d={d} fill="none" stroke={COLORS.connector} strokeWidth={3} strokeLinejoin="round" markerEnd="url(#flow-arrow)" />
 )
@@ -45,6 +51,7 @@ const Equipment = ({ id, x, y, width, children }: { id: string; x: number; y: nu
 
 const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
   const layouts = new Map<string, LayoutRect>()
+  const cartonLayouts = new Map<string, LayoutRect>()
 
   for (const spec of ZONED_SPECS) {
     if (!segments.some((segment) => segment.id === spec.id)) continue
@@ -55,6 +62,15 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
         ? { x: spec.x + visualIndex * zoneLength, y: spec.y - ZONE_THICKNESS / 2, w: zoneLength, h: ZONE_THICKNESS, conveyorId: spec.id, region: 'MDR', orientation: spec.orientation, zoneIndex: index, reverse: spec.reverse }
         : { x: spec.x - ZONE_THICKNESS / 2, y: spec.y + visualIndex * zoneLength, w: ZONE_THICKNESS, h: zoneLength, conveyorId: spec.id, region: 'MDR', orientation: spec.orientation, zoneIndex: index, reverse: spec.reverse }
       layouts.set(`${spec.id}:MDR:${index}`, rect)
+    }
+  }
+
+  for (const spec of CARTBUILD_SPECS) {
+    if (!segments.some((segment) => segment.id === spec.id)) continue
+    const zoneLength = spec.length / 30
+    for (let index = 0; index < 30; index++) {
+      const visualIndex = 29 - index
+      cartonLayouts.set(`${spec.id}:MDR:${index}`, { x: spec.x - 8, y: spec.y + visualIndex * zoneLength, w: 16, h: zoneLength, conveyorId: spec.id, region: 'MDR', orientation: 'vertical', zoneIndex: index, reverse: true })
     }
   }
 
@@ -121,6 +137,14 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
         <Connector id="A2-to-A-exchanger" from="A2" to="A_EXCHANGER" d="M300 795 L300 810" />
         <Connector id="B2-to-B-exchanger" from="B2" to="B_EXCHANGER" d="M430 795 L430 810" />
         <Connector id="C2-to-C-exchanger" from="C2" to="C_EXCHANGER" d="M620 795 L620 810" />
+        {state.cartbuildSystem.enabled && <>
+          <Connector id="DETRAYER-A-to-CARTBUILD-A" from="DETRAYER_A" to="CARTBUILD_A" d="M312 470 L335 470 L335 460" />
+          <Connector id="DETRAYER-B-to-CARTBUILD-B" from="DETRAYER_B" to="CARTBUILD_B" d="M442 470 L465 470 L465 460" />
+          <Connector id="DETRAYER-C-to-CARTBUILD-C" from="DETRAYER_C" to="CARTBUILD_C" d="M632 470 L655 470 L655 460" />
+          <Connector id="CARTBUILD-A-to-OPERATOR-A" from="CARTBUILD_A" to="OPERATOR_A" d="M335 235 L335 214" />
+          <Connector id="CARTBUILD-B-to-OPERATOR-B" from="CARTBUILD_B" to="OPERATOR_B" d="M465 235 L465 214" />
+          <Connector id="CARTBUILD-C-to-OPERATOR-C" from="CARTBUILD_C" to="OPERATOR_C" d="M655 235 L655 214" />
+        </>}
       </g>
 
       <g aria-label="Conveyor zones" data-conveyor-bounds="S" data-bounds-x="480" data-bounds-y="504" data-bounds-width="90" data-bounds-height="48">
@@ -131,10 +155,14 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
             <rect x={layout.x} y={layout.y} width={layout.w} height={layout.h} fill={fill} stroke={layout.region === 'BELT' ? COLORS.beltEdge : COLORS.conveyorEdge} strokeWidth={layout.region === 'BELT' ? 2 : 1} />
           </g>
         })}
+        {Array.from(cartonLayouts.entries()).map(([key, layout]) => <g key={key} data-zone-id={key} data-cartbuild-lane={layout.conveyorId} data-conveyor-id={layout.conveyorId} data-region="MDR" data-zone-index={layout.zoneIndex}>
+          <rect x={layout.x} y={layout.y} width={layout.w} height={layout.h} fill="#eadfce" stroke="#866d4d" strokeWidth={1} />
+        </g>)}
       </g>
 
       <g aria-label="Section labels">
         {sectionLabels.map((label) => <text key={label.id} data-section-label={label.id} x={label.x} y={label.y} textAnchor={label.anchor as 'middle' | 'start'} transform={label.rotate ? `rotate(-90 ${label.x} ${label.y})` : undefined} fill={COLORS.text} fontSize={12} fontWeight={700}>{label.text}</text>)}
+        {CARTBUILD_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => <text key={spec.id} data-section-label={spec.id} x={spec.x + 19} y={spec.y + spec.length / 2} textAnchor="middle" transform={`rotate(-90 ${spec.x + 19} ${spec.y + spec.length / 2})`} fill={COLORS.text} fontSize={9} fontWeight={700}>{spec.label}</text>)}
         <text x={805} y={516} textAnchor="middle" fill={COLORS.text} fontSize={11} fontWeight={700}>RETURN SORTER</text>
         <text x={1518} y={57} fill={COLORS.text} fontSize={10}>FLOW →</text>
       </g>
@@ -143,9 +171,18 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
       <Equipment id="A_EXCHANGER" x={250} y={810} width={100}>A EXCHANGER</Equipment>
       <Equipment id="B_EXCHANGER" x={380} y={810} width={100}>B EXCHANGER</Equipment>
       <Equipment id="C_EXCHANGER" x={570} y={810} width={100}>C EXCHANGER</Equipment>
+      {CARTBUILD_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => <Equipment key={spec.source} id={`OPERATOR_${spec.source}`} x={spec.x - 35} y={180} width={70}>{`OPERATOR ${spec.source}`}</Equipment>)}
 
       <g aria-label="Junctions">
         {[[430, 90, 'AB-merge'], [640, 90, 'T-merge'], [820, 90, 'T-diverter'], [806, 330, 'return-merge'], [806, 520, 'return-sorter'], [480, 540, 'S-diverter']].map(([x, y, id]) => <rect key={String(id)} data-junction-id={id} x={Number(x) - 5} y={Number(y) - 5} width={10} height={10} transform={`rotate(45 ${x} ${y})`} fill="#f8fafb" stroke={COLORS.connector} strokeWidth={2} />)}
+      </g>
+
+      <g aria-label="Cartbuild detrayers">
+        {CARTBUILD_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => <g key={spec.source} data-detrayer-id={`DETRAYER_${spec.source}`}>
+          <rect x={PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 10} y={465} width={20} height={10} rx={2} fill="#f3c975" stroke="#75551e" strokeWidth={2} />
+          <title>{`DETRAYER ${spec.source} between upstream zones 2 and 3`}</title>
+          <text x={PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 18} y={470} textAnchor="middle" transform={`rotate(-90 ${PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 18} 470)`} fontSize={7} fontWeight={700} fill={COLORS.text}>{`DETRAYER ${spec.source}`}</text>
+        </g>)}
       </g>
 
       <g aria-label="Trays">
@@ -154,14 +191,23 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
           const fill = tray.korberHeld ? COLORS.held : tray.loadState === 'FULL' ? COLORS.full : COLORS.empty
           const label = String(tray.id).slice(-3)
           const showLabel = width >= 12 && segment !== 'D'
-          return <g key={tray.id} data-tray-id={tray.id} data-segment-id={segment} data-zone-index={zoneIndex} data-load-state={tray.loadState ?? 'EMPTY'} data-return-destination={tray.returnDestination} data-purge-member={tray.purgeMember || undefined}>
+          return <g key={tray.id} data-tray-id={tray.id} data-segment-id={segment} data-zone-index={zoneIndex} data-load-state={tray.loadState ?? 'EMPTY'} data-payload-origin={tray.payloadOrigin} data-cartbuild-carton-attached={tray.cartbuildCartonAttached || undefined} data-return-destination={tray.returnDestination} data-purge-member={tray.purgeMember || undefined}>
             <title>{`Tray ${tray.id} · ${tray.loadState ?? 'EMPTY'}${tray.returnDestination ? ` · ${tray.returnDestination}` : ''}${tray.purgeMember ? ' · PURGE MEMBER' : ''}${tray.korberHeld ? ' · HELD AT KÖRBER' : ''}`}</title>
             {orientation === 'vertical'
               ? <rect x={x - 7} y={y - 5} width={14} height={10} rx={2} fill={fill} stroke={tray.purgeMember ? COLORS.purge : accent} strokeWidth={tray.purgeMember ? 3 : tray.returnDestination ? 2 : 1} />
               : <rect x={x - 6} y={y - 7} width={12} height={14} rx={2} fill={fill} stroke={tray.purgeMember ? COLORS.purge : accent} strokeWidth={tray.purgeMember ? 3 : tray.returnDestination ? 2 : 1} />}
             {showLabel && <text x={x} y={y + 3} textAnchor="middle" fill="white" fontSize={7} fontWeight={700}>{label}</text>}
+            {tray.cartbuildCartonAttached && <rect data-attached-carton="true" x={x - 4} y={y - 11} width={8} height={6} rx={1} fill="#d39a45" stroke="#6e4819" strokeWidth={1} />}
           </g>
         })}
+      </g>
+
+      <g aria-label="Anonymous cartbuild cartons">
+        {Object.values(state.cartbuildSystem.lanes).flatMap((lane) => lane.markers.map((carton) => {
+          const layout = cartonLayouts.get(`${lane.id}:MDR:${carton.zoneIndex}`)
+          if (!layout) return null
+          return <rect key={`${lane.id}-${carton.internalKey}`} data-carton-marker="true" data-cartbuild-lane={lane.id} data-zone-id={`${lane.id}:MDR:${carton.zoneIndex}`} data-carton-state="ON_CONVEYOR" x={layout.x + 3} y={layout.y + layout.h / 2 - 3} width={10} height={6} rx={1} fill="#d39a45" stroke="#6e4819" strokeWidth={1} />
+        }))}
       </g>
 
       <g data-legend="tray-and-conveyor-states" transform="translate(930 760)">
