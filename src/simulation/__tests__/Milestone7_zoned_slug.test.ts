@@ -37,7 +37,8 @@ describe('Milestone 7 topology and reset', () => {
     expect(countPile(state.trays, 'C')).toBe(16)
     expect(state.slugCursor).toBe('A')
     expect(state.activeSlug).toBeNull()
-    expect(state.createdTrayCount).toBe(150)
+    expect(state.trays).toHaveLength(150)
+    expect(state.createdTrayCount).toBe(229)
     assertInvariants(createEngine())
   })
 
@@ -217,7 +218,7 @@ describe('Milestone 7 slug arbitration and invariants', () => {
     for (let second = 0; second < 700; second++) {
       engine.step(1)
       const state = engine.getState()
-      maximumPhysical = Math.max(maximumPhysical, state.physicalTrayCount)
+      maximumPhysical = Math.max(maximumPhysical, state.trays.length)
       if (state.lastCompletedSlug) seen.add(state.lastCompletedSlug.source)
       assertInvariants(engine)
     }

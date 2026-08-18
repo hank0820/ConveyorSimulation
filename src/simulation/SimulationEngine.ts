@@ -1025,6 +1025,7 @@ export class SimulationEngine {
       sources,
       mergeState: { ...this.mergeState },
       missions: this.missions.map(m => ({ ...m })),
+      asrsRobotSystem: { outboundRobots: [], maturedQueues: { A: [], B: [], C: [] }, robotCarriedTrayCount: 0 },
       korber: {
         lastConsumptionTime: this.korberLastConsumption === -Number.MAX_VALUE ? null : this.korberLastConsumption,
         totalConsumed: this.korberTotalConsumed,

@@ -167,6 +167,33 @@ export interface Mission {
   state: MissionState
 }
 
+export type OutboundRobotLifecycleState = 'TRAVELING_OUTBOUND' | 'QUEUED_FOR_DROP' | 'HEAD_OF_DROP_QUEUE' | 'BLOCKED_FROM_DROP' | 'OUTBOUND_COMPLETE'
+export type OutboundRobotBlockedReason = 'PILE_ENTRANCE_OCCUPIED' | 'CARTBUILD_LANE_ENTRANCE_OCCUPIED'
+
+export interface OutboundRobotSnapshot {
+  robotId: number
+  missionId: number
+  missionType: MissionType
+  assignedExchanger: SourceId
+  lifecycleState: OutboundRobotLifecycleState
+  assignedAtSec: number
+  maturityTimeSec: number
+  travelProgress: number
+  queuePosition: number | null
+  blockedReason: OutboundRobotBlockedReason | null
+  blockedDurationSec: number
+  payloadTrayId: number
+  payloadLoadState: TrayLoadState
+  cartbuildCartonAttached: boolean
+  ownsPayload: boolean
+}
+
+export interface AsrsRobotSystemState {
+  outboundRobots: OutboundRobotSnapshot[]
+  maturedQueues: Record<SourceId, number[]>
+  robotCarriedTrayCount: number
+}
+
 export type SrsPileId = 'A1' | 'B1' | 'C1' | 'T' | 'D' | 'A2' | 'B2' | 'C2'
 
 export interface SrsLaneDiagnostic {
@@ -295,6 +322,7 @@ export interface SimulationState {
     starved: boolean
   }
   missions: Mission[]
+  asrsRobotSystem: AsrsRobotSystemState
   pendingA: number
   pendingB: number
   pendingC: number

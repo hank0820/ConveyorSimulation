@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import SimulationEngine from '../SimulationEngine'
-import type { ReturnDestination, Tray } from '../types'
+import type { Mission, ReturnDestination, Tray } from '../types'
 
 const SEGMENTS = [
   { id: 'A1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 24 },
@@ -20,6 +20,7 @@ const SEGMENTS = [
 
 type Runtime = {
   trays: Tray[]
+  missions: Mission[]
   totalTraysCreated: number
   consumedCount: number
   nextConsumptionTime: number
@@ -69,6 +70,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     const engine = createEngine()
     const runtime = runtimeOf(engine)
     runtime.trays = [zoned(1, 'D', 93), zoned(40, 'D', 92), ...Array.from({ length: 35 }, (_, zone) => zoned(zone + 2, 'E', zone))]
+    runtime.missions = []
     runtime.totalTraysCreated = runtime.trays.length
     runtime.consumedCount = 0
     runtime.nextConsumptionTime = 0
@@ -103,6 +105,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     const engine = createEngine()
     const runtime = runtimeOf(engine)
     runtime.trays = Array.from({ length: 12 }, (_, zone) => zoned(zone + 1, 'T', zone))
+    runtime.missions = []
     runtime.trays.push(zoned(20, 'D', 0))
     runtime.totalTraysCreated = 13
     runtime.nextConsumptionTime = Number.MAX_VALUE
@@ -218,6 +221,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     const engine = createEngine()
     const runtime = runtimeOf(engine)
     runtime.trays = [zoned(1, 'A2', 35, 'FULL'), zoned(2, 'B2', 28), zoned(3, 'C2', 27)]
+    runtime.missions = []
     runtime.totalTraysCreated = 3
     runtime.processExchangerSinks()
     expect(runtime.trays.map(({ id }) => id)).toEqual([3])
@@ -281,6 +285,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
       ...Array.from({ length: 94 }, (_, zone) => zoned(zone + 1, 'D', zone)),
       ...Array.from({ length: 12 }, (_, zone) => zoned(zone + 95, 'T', zone)),
     ]
+    runtime.missions = []
     runtime.totalTraysCreated = runtime.trays.length
     runtime.nextConsumptionTime = 3600 / 1050
     let prior = engine.getState()

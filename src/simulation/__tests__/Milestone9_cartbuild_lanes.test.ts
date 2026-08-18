@@ -76,7 +76,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     state = engine.getState()
     expect(state.timeSec).toBe(0)
     expect(state.operatingSettings).toEqual({ korberEnabled: true, cartbuildAEnabled: true, cartbuildBEnabled: true, cartbuildCEnabled: true })
-    expect(state.cartbuildSystem.cartbuildCartonsIntroduced).toBe(0)
+    expect(state.cartbuildSystem.cartbuildCartonsIntroduced).toBe(79)
   })
 
   test('runtime settings mutate the same engine without changing time, trays, missions, or clocks', () => {
@@ -234,6 +234,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     tray.payloadOrigin = 'CARTBUILD'
     tray.cartbuildCartonAttached = true
     runtime.trays = [tray]
+    runtime.missions = []
     runtime.cartons = []
     runtime.totalTraysCreated = 1
     runtime.cartonIntroduced = { A: 1, B: 0, C: 0 }
@@ -284,6 +285,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
     runtime.trays = []
+    runtime.missions = []
     runtime.totalTraysCreated = 0
     runtime.cartonIntroduced = { A: 3, B: 0, C: 0 }
     runtime.cartons = [
@@ -308,6 +310,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
     runtime.trays = []
+    runtime.missions = []
     runtime.totalTraysCreated = 0
     runtime.cartons = []
     runtime.cartonIntroduced = { A: 0, B: 0, C: 0 }
