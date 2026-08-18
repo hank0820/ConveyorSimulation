@@ -174,6 +174,57 @@
 .diagnostic-group summary { cursor: pointer; color: #435d6d; font-weight: 700; }
 .detail-list { margin: 6px 0 0; padding-left: 18px; font-family: var(--mono); font-size: 10px; }
 
+.asrs-diagnostic-group { background: #f8fafb; }
+.asrs-diagnostics { margin-top: 0 !important; }
+.asrs-section-heading,
+.asrs-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.asrs-section-heading { color: #304754 !important; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.asrs-global-grid { margin-top: 9px; padding-bottom: 8px; border-bottom: 1px solid #d9e0e5; }
+.asrs-exchanger-list { display: grid; gap: 7px; margin-top: 8px; }
+.asrs-exchanger-card {
+  padding: 7px;
+  border: 1px solid #cbd5dc;
+  border-radius: 4px;
+  background: white;
+  box-shadow: inset 3px 0 #9eabb5;
+}
+.asrs-exchanger-card.active { box-shadow: inset 3px 0 #2f7896; }
+.asrs-exchanger-card.blocked { background: #fff7f6; box-shadow: inset 3px 0 #b42318; }
+.asrs-card-heading { margin-bottom: 6px; color: #263f4d; font-size: 11px; }
+.asrs-status {
+  display: inline-block;
+  padding: 2px 5px;
+  border-radius: 9px;
+  background: #e6ebef;
+  color: #52636e;
+  font: 700 9px var(--sans);
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+.asrs-status.active { background: #dcecf3; color: #185b78; }
+.asrs-status.blocked { background: #f8d7d4; color: #9c2017; }
+.asrs-status.returning { background: #e5e1f4; color: #56468a; }
+.asrs-status.cancelled { background: #eee9e4; color: #6f5a48; }
+.asrs-reservation-list { margin-top: 9px; padding-top: 8px; border-top: 1px solid #d9e0e5; }
+.asrs-reservation-list > strong { color: #304754; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.asrs-reservation-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 2px 7px;
+  margin-top: 5px;
+  padding: 5px 6px;
+  border-radius: 3px;
+  background: #edf2f5;
+  color: #344b5b;
+  font: 9px var(--mono);
+}
+.asrs-reservation-row > span:first-child { grid-row: 1 / 4; align-self: center; font-weight: 800; }
+
 .enablement-group { border-color: #8da5b4; background: #f8fbfc; }
 .enablement-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .enablement-toggle {

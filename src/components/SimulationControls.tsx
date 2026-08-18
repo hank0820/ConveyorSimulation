@@ -29,11 +29,70 @@ const EnablementToggle = ({ label, setting, enabled, onChange }: { label: string
   </label>
 )
 
+type RobotCategory = 'TRAVELING' | 'QUEUED' | 'DROP' | 'SHIFT_TAKE' | 'RETURNING'
+type ActiveRobotDiagnostic = {
+  robotId: number
+  missionId: number
+  source: SourceId
+  missionType: 'CARTBUILD' | 'EMPTY' | 'INBOUND_ONLY'
+  lifecycleState: string
+  queuePosition: number | null
+  returnProgress: number
+  outboundPayloadCarried: boolean
+  inboundPayloadCarried: boolean
+  category: RobotCategory
+}
+
+const activeRobotDiagnostics = (state: SimulationStateWithProgress): ActiveRobotDiagnostic[] => {
+  const candidates = [
+    ...state.asrsRobotSystem.outboundRobots
+      .filter((robot) => robot.lifecycleState !== 'OUTBOUND_COMPLETE')
+      .map((robot) => ({
+        robotId: robot.robotId, missionId: robot.missionId, source: robot.assignedExchanger, missionType: robot.missionType,
+        lifecycleState: robot.lifecycleState, queuePosition: robot.queuePosition, returnProgress: robot.returnProgress,
+        outboundPayloadCarried: robot.ownsPayload, inboundPayloadCarried: robot.lifecycleState === 'RETURNING_TO_RACK' && robot.inboundTrayId !== null,
+      })),
+    ...state.asrsRobotSystem.inboundOnlyRobots
+      .filter((robot) => robot.lifecycleState !== 'INBOUND_COMPLETE' && robot.lifecycleState !== 'CANCELLED')
+      .map((robot) => ({
+        robotId: robot.robotId, missionId: robot.missionId, source: robot.assignedExchanger, missionType: 'INBOUND_ONLY' as const,
+        lifecycleState: robot.lifecycleState, queuePosition: robot.queuePosition, returnProgress: robot.returnProgress,
+        outboundPayloadCarried: false, inboundPayloadCarried: robot.ownsInboundTray,
+      })),
+  ]
+  return candidates.map((robot) => {
+    const exchanger = state.asrsRobotSystem.exchangers[robot.source]
+    let category: RobotCategory
+    if (robot.lifecycleState === 'RETURNING_TO_RACK') category = robot.returnProgress <= 0 ? 'SHIFT_TAKE' : 'RETURNING'
+    else if (robot.lifecycleState === 'SHIFTING_TO_TAKE' || exchanger.shiftingOrTakeRobotId === robot.robotId) category = 'SHIFT_TAKE'
+    else if (robot.lifecycleState === 'AT_DROP' || robot.lifecycleState === 'BLOCKED_FROM_DROP' || exchanger.dropRobotId === robot.robotId) category = 'DROP'
+    else if (robot.queuePosition !== null || robot.lifecycleState === 'QUEUED_FOR_DROP' || robot.lifecycleState === 'HEAD_OF_DROP_QUEUE') category = 'QUEUED'
+    else category = 'TRAVELING'
+    return { ...robot, category }
+  })
+}
+
+const utilization = (dual: number, outboundOnly: number) => {
+  const denominator = dual + outboundOnly
+  return denominator === 0 ? 0 : dual / denominator * 100
+}
+const utilizationText = (value: number) => value === 0 ? '0%' : `${value.toFixed(1)}%`
+const abbreviatedId = (id: number | null) => id === null ? '—' : `R${String(id).slice(-3)}`
+const abbreviatedTrayId = (id: number | null) => id === null ? '—' : `T${String(id).slice(-3)}`
+const secondsText = (seconds: number | null) => seconds === null ? '—' : `${seconds.toFixed(1)}s`
+
 const SimulationControls: FC<Props> = ({
   state, playing, playbackSpeed, setPlaybackSpeed, onPlayPause, onStep, onReset, onStartScenario, onOperatingSettingChange, onPlanningCadenceChange, configurationNotice, collapsed, onToggleCollapsed,
 }) => {
   const purge = state.returnSystem.activePurgeBatch
   const frozenIds = purge?.authorizedTrayIds ?? state.returnSystem.lastCompletedPurgeBatch?.authorizedTrayIds ?? []
+  const activeRobots = activeRobotDiagnostics(state)
+  const activeCategoryCount = (category: RobotCategory) => activeRobots.filter((robot) => robot.category === category).length
+  const completed = state.asrsRobotSystem.completedCountByClassification
+  const globalDualUtilization = utilization(completed.DUAL_CYCLE, completed.OUTBOUND_ONLY)
+  const outboundPayloadsCarried = activeRobots.filter((robot) => robot.outboundPayloadCarried).length
+  const inboundPayloadsCarried = activeRobots.filter((robot) => robot.inboundPayloadCarried).length
+  const cancelledRobotCount = state.asrsRobotSystem.cancelledInboundOnlyRobots.length
 
   return (
     <aside className="control-panel" data-panel-state={collapsed ? 'collapsed' : 'expanded'} aria-label="Simulation controls and diagnostics">
@@ -98,6 +157,130 @@ const SimulationControls: FC<Props> = ({
               <li>Remaining: {state.srsControl.tBypassBatch.remainingCount}</li>
               <li>Source paused: {state.srsControl.tBypassBatch.sourceBatchPaused ? 'YES' : 'NO'}</li>
             </ul>
+          </details>
+        </section>
+
+        <section
+          className="diagnostic-group asrs-diagnostic-group"
+          data-asrs-robot-summary
+          data-active-robot-count={activeRobots.length}
+          data-traveling-count={activeCategoryCount('TRAVELING')}
+          data-queued-count={activeCategoryCount('QUEUED')}
+          data-drop-count={activeCategoryCount('DROP')}
+          data-shift-take-count={activeCategoryCount('SHIFT_TAKE')}
+          data-returning-count={activeCategoryCount('RETURNING')}
+          data-dual-cycle-count={completed.DUAL_CYCLE}
+          data-outbound-only-count={completed.OUTBOUND_ONLY}
+          data-inbound-only-count={completed.INBOUND_ONLY}
+          data-cancelled-count={cancelledRobotCount}
+          data-dual-utilization={globalDualUtilization.toFixed(1)}
+        >
+          <details className="asrs-diagnostics" open>
+            <summary className="asrs-section-heading">
+              <span>ASRS Robots</span>
+              <span className={`asrs-status ${activeRobots.length ? 'active' : 'idle'}`}>{activeRobots.length} active</span>
+            </summary>
+            <div className="diagnostic-grid asrs-global-grid">
+              <Metric label="Traveling outbound">{activeCategoryCount('TRAVELING')}</Metric>
+              <Metric label="Matured / queued">{activeCategoryCount('QUEUED')}</Metric>
+              <Metric label="DROP">{activeCategoryCount('DROP')}</Metric>
+              <Metric label="Shift / TAKE">{activeCategoryCount('SHIFT_TAKE')}</Metric>
+              <Metric label="Returning">{activeCategoryCount('RETURNING')}</Metric>
+              <Metric label="Outbound payloads">{outboundPayloadsCarried}</Metric>
+              <Metric label="Inbound payloads">{inboundPayloadsCarried}</Metric>
+              <Metric label="Completed total">{state.asrsRobotSystem.completedCycles.length}</Metric>
+              <Metric label="Dual / outbound / inbound">{`${completed.DUAL_CYCLE}/${completed.OUTBOUND_ONLY}/${completed.INBOUND_ONLY}`}</Metric>
+              <Metric label="Cancelled">{cancelledRobotCount}</Metric>
+              <Metric label="Dual utilization">{utilizationText(globalDualUtilization)}</Metric>
+            </div>
+
+            <div className="asrs-exchanger-list">
+              {(['A', 'B', 'C'] as SourceId[]).map((source) => {
+                const exchanger = state.asrsRobotSystem.exchangers[source]
+                const sourceRobots = activeRobots.filter((robot) => robot.source === source)
+                const dropRobot = sourceRobots.find((robot) => robot.robotId === exchanger.dropRobotId)
+                const takeRobot = sourceRobots.find((robot) => robot.robotId === exchanger.shiftingOrTakeRobotId)
+                  ?? sourceRobots.find((robot) => robot.lifecycleState === 'RETURNING_TO_RACK' && robot.returnProgress <= 0)
+                const reservations = state.asrsRobotSystem.inboundReservations.filter((reservation) => reservation.exchanger === source)
+                const sourceCompleted = exchanger.completedCountByClassification
+                const sourceCancelled = state.asrsRobotSystem.cancelledInboundOnlyRobots.filter((robot) => robot.exchanger === source).length
+                const sourceDualUtilization = utilization(sourceCompleted.DUAL_CYCLE, sourceCompleted.OUTBOUND_ONLY)
+                const queueDepth = exchanger.queueLength
+                const visibleQueueDepth = Math.min(queueDepth, 4)
+                const queueOverflow = Math.max(0, queueDepth - 4)
+                const returningCount = sourceRobots.filter((robot) => robot.lifecycleState === 'RETURNING_TO_RACK').length
+                const isBlocked = exchanger.dropBlocked
+                const status = isBlocked ? 'blocked' : sourceRobots.length ? 'active' : 'idle'
+                return <article
+                  className={`asrs-exchanger-card ${status}`}
+                  key={source}
+                  data-exchanger-id={source}
+                  data-active-robot-count={sourceRobots.length}
+                  data-outbound-traveler-count={sourceRobots.filter((robot) => robot.category === 'TRAVELING').length}
+                  data-queue-depth={queueDepth}
+                  data-visible-queue-depth={visibleQueueDepth}
+                  data-queue-overflow={queueOverflow}
+                  data-drop-robot-id={dropRobot?.robotId ?? ''}
+                  data-drop-mission-id={dropRobot?.missionId ?? ''}
+                  data-drop-mission-type={dropRobot?.missionType ?? ''}
+                  data-drop-blocked={isBlocked}
+                  data-drop-blocked-reason={exchanger.dropBlockedReason ?? ''}
+                  data-take-robot-id={takeRobot?.robotId ?? ''}
+                  data-reserved-inbound-tray-ids={reservations.map((reservation) => reservation.trayId).join(',')}
+                  data-returning-count={returningCount}
+                  data-dual-cycle-count={sourceCompleted.DUAL_CYCLE}
+                  data-outbound-only-count={sourceCompleted.OUTBOUND_ONLY}
+                  data-inbound-only-count={sourceCompleted.INBOUND_ONLY}
+                  data-cancelled-count={sourceCancelled}
+                  data-dual-utilization={sourceDualUtilization.toFixed(1)}
+                >
+                  <div className="asrs-card-heading">
+                    <strong>Exchanger {source}</strong>
+                    <span className={`asrs-status ${status}`}>{status.toUpperCase()}</span>
+                  </div>
+                  <div className="diagnostic-grid detail-grid">
+                    <Metric label="Active / traveling">{`${sourceRobots.length}/${sourceRobots.filter((robot) => robot.category === 'TRAVELING').length}`}</Metric>
+                    <Metric label="Queue / visible / overflow">{`${queueDepth}/${visibleQueueDepth}/${queueOverflow}`}</Metric>
+                    <Metric label="DROP robot">{dropRobot ? <span title={`Robot ${dropRobot.robotId} / mission ${dropRobot.missionId}`}>{`${abbreviatedId(dropRobot.robotId)} ${dropRobot.missionType}`}</span> : '—'}</Metric>
+                    <Metric label="DROP state" tone={isBlocked ? 'alert' : undefined}>{isBlocked ? `${exchanger.dropBlockedReason} ${secondsText(exchanger.dropBlockedDurationSec)}` : 'CLEAR'}</Metric>
+                    <Metric label="Shift / TAKE">{takeRobot ? <span title={`Robot ${takeRobot.robotId} / mission ${takeRobot.missionId}`}>{abbreviatedId(takeRobot.robotId)}</span> : '—'}</Metric>
+                    <Metric label="Reserved inbound">{reservations.length ? reservations.map((reservation) => <span key={reservation.trayId} title={`Tray ${reservation.trayId} / robot ${reservation.robotId} / mission ${reservation.missionId}`}>{abbreviatedTrayId(reservation.trayId)}</span>) : '—'}</Metric>
+                    <Metric label="Returning">{returningCount}</Metric>
+                    <Metric label="Last successful unload">{secondsText(exchanger.lastSuccessfulDropTime)}</Metric>
+                    <Metric label="Next DROP admission">{secondsText(exchanger.nextEligibleCycleAdmissionTime)}</Metric>
+                    <Metric label="Maximum queue">{exchanger.maximumObservedQueueLength}</Metric>
+                    <Metric label="Completed D/O/I">{`${sourceCompleted.DUAL_CYCLE}/${sourceCompleted.OUTBOUND_ONLY}/${sourceCompleted.INBOUND_ONLY}`}</Metric>
+                    <Metric label="Cancelled / dual util.">{`${sourceCancelled}/${utilizationText(sourceDualUtilization)}`}</Metric>
+                  </div>
+                </article>
+              })}
+            </div>
+
+            <div className="asrs-reservation-list" aria-label="Cartbuild reservations">
+              <strong>Cartbuild reservations</strong>
+              {(['A', 'B', 'C'] as SourceId[]).map((source) => {
+                const lane = state.cartbuildSystem.lanes[`CARTBUILD_${source}` as keyof typeof state.cartbuildSystem.lanes]
+                const reservations = state.asrsRobotSystem.inboundReservations.filter((reservation) => reservation.exchanger === source)
+                return <div
+                  className="asrs-reservation-row"
+                  key={source}
+                  data-asrs-reservation-exchanger={source}
+                  data-cartbuild-capacity={lane.positionCapacity}
+                  data-cartbuild-committed={lane.committedPositions}
+                  data-cartbuild-available={lane.availablePositions}
+                  data-pending-cartbuild={lane.pendingMissionReservations}
+                  data-attached-payloads={lane.attachedTrayReservations}
+                  data-physical-cartons={lane.physicalLaneOccupancy}
+                  data-reserved-inbound-count={reservations.length}
+                  data-reserved-inbound-ids={reservations.map((reservation) => reservation.trayId).join(',')}
+                >
+                  <span>{source}</span>
+                  <span>{`cap ${lane.positionCapacity} / committed ${lane.committedPositions} / avail ${lane.availablePositions}`}</span>
+                  <span>{`pending ${lane.pendingMissionReservations} / attached ${lane.attachedTrayReservations} / physical ${lane.physicalLaneOccupancy}`}</span>
+                  <span title={reservations.length ? reservations.map((reservation) => `tray ${reservation.trayId} / robot ${reservation.robotId}`).join(', ') : undefined}>{`inbound ${reservations.length}`}</span>
+                </div>
+              })}
+            </div>
           </details>
         </section>
 
