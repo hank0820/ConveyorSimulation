@@ -81,6 +81,12 @@ export interface DetrayerDiagnostic {
 export interface CartbuildLaneState {
   id: CartbuildLaneId
   enabled: boolean
+  positionCapacity: number
+  pendingMissionReservations: number
+  attachedTrayReservations: number
+  physicalLaneOccupancy: number
+  committedPositions: number
+  availablePositions: number
   lengthFt: number
   zoneCount: number
   speedFtPerMin: number

@@ -723,8 +723,28 @@ export default class Milestone7Simulation {
     return Math.max(0, local + downstream - this.pendingDemand(source))
   }
 
+  private cartbuildReservation(source: SourceId) {
+    const laneId = laneFor(source)
+    const pendingMissionReservations = this.missions.filter((mission) =>
+      mission.assignedExchanger === source && mission.missionType === 'CARTBUILD' && mission.state !== 'RELEASED'
+    ).length
+    const attachedTrayReservations = this.trays.filter((tray) =>
+      tray.originSourceId === source && tray.payloadOrigin === 'CARTBUILD' && tray.cartbuildCartonAttached
+    ).length
+    const physicalLaneOccupancy = this.cartons.filter((carton) => carton.laneId === laneId).length
+    const committedPositions = pendingMissionReservations + attachedTrayReservations + physicalLaneOccupancy
+    return {
+      positionCapacity: CARTBUILD_ZONE_COUNT,
+      pendingMissionReservations,
+      attachedTrayReservations,
+      physicalLaneOccupancy,
+      committedPositions,
+      availablePositions: Math.max(0, CARTBUILD_ZONE_COUNT - committedPositions),
+    }
+  }
+
   private missionTypeFor(source: SourceId): MissionType | undefined {
-    if (this.cartbuildAvailable && this.operatingSettings[settingFor(source)]) return 'CARTBUILD'
+    if (this.cartbuildAvailable && this.operatingSettings[settingFor(source)] && this.cartbuildReservation(source).availablePositions > 0) return 'CARTBUILD'
     if (this.operatingSettings.korberEnabled) return 'EMPTY'
     return undefined
   }
@@ -857,8 +877,10 @@ export default class Milestone7Simulation {
       const markers = this.cartons.filter((carton) => carton.laneId === id).map((carton) => ({ ...carton }))
       const times = this.operatorConsumptionTimes[source]
       const last = times.at(-1) ?? null
+      const reservation = this.cartbuildReservation(source)
       return [id, {
         id, enabled: this.cartbuildAvailable && this.operatingSettings[settingFor(source)], lengthFt: 75, zoneCount: CARTBUILD_ZONE_COUNT,
+        ...reservation,
         speedFtPerMin: 120, zoneTransferSec: ZONE_TRANSFER_SEC, markers, occupancy: markers.length,
         introducedCount: this.cartonIntroduced[source], operatorConsumedCount: times.length, operatorConsumptionTimes: [...times],
         finalZoneOccupied: markers.some((carton) => carton.zoneIndex === CARTBUILD_ZONE_COUNT - 1),
