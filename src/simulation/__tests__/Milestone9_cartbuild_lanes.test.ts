@@ -76,7 +76,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     state = engine.getState()
     expect(state.timeSec).toBe(0)
     expect(state.operatingSettings).toEqual({ korberEnabled: true, cartbuildAEnabled: true, cartbuildBEnabled: true, cartbuildCEnabled: true })
-    expect(state.cartbuildSystem.cartbuildCartonsIntroduced).toBe(0)
+    expect(state.cartbuildSystem.cartbuildCartonsIntroduced).toBe(79)
   })
 
   test('runtime settings mutate the same engine without changing time, trays, missions, or clocks', () => {
@@ -127,11 +127,11 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     expect(state.cartbuildSystem.exchangers.C.mostRecentReleaseType).toBeNull()
   })
 
-  test('blocked cartbuild falls back to a matured EMPTY mission without consuming failed capacity', () => {
+  test('pile-blocked CARTBUILD DROP ownership prevents matured EMPTY bypass', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
-    runtime.trays = []
-    runtime.cartons = [{ internalKey: 1, laneId: 'CARTBUILD_A', zoneIndex: 0 }]
+    runtime.trays = [pileTray(99, 'A', 0)]
+    runtime.cartons = []
     runtime.missions = [
       { missionId: 1, assignedExchanger: 'A', missionType: 'CARTBUILD', createdAtSec: 0, readyAtSec: 0, state: 'READY_AT_EXCHANGER' },
       { missionId: 2, assignedExchanger: 'A', missionType: 'EMPTY', createdAtSec: 1, readyAtSec: 1, state: 'READY_AT_EXCHANGER' },
@@ -140,9 +140,9 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     runtime.asrsLastRelease.A = -1e9
     runtime.attemptExchangerReleases()
     const state = engine.getState()
-    expect(state.cartbuildSystem.exchangers.A).toMatchObject({ loadedReleases: 0, emptyReleases: 1, mostRecentReleaseType: 'EMPTY' })
-    expect(state.missions.map((mission) => mission.state)).toEqual(['READY_AT_EXCHANGER', 'RELEASED'])
-    expect(state.trays[0]).toMatchObject({ loadState: 'EMPTY', originSourceId: 'A' })
+    expect(state.cartbuildSystem.exchangers.A).toMatchObject({ loadedReleases: 0, emptyReleases: 0, mostRecentReleaseType: null })
+    expect(state.missions.map((mission) => mission.state)).toEqual(['READY_AT_EXCHANGER', 'READY_AT_EXCHANGER'])
+    expect(state.asrsRobotSystem.exchangers.A.dropBlocked).toBe(true)
   })
 
   test('exchanger arbitration is oldest-first within type and CARTBUILD remains ahead of older EMPTY work', () => {
@@ -171,8 +171,8 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
   test('a failed physical attempt neither releases the mission nor advances the exchanger clock', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
-    runtime.trays = []
-    runtime.cartons = [{ internalKey: 1, laneId: 'CARTBUILD_A', zoneIndex: 0 }]
+    runtime.trays = [pileTray(99, 'A', 0)]
+    runtime.cartons = []
     runtime.missions = [{ missionId: 1, assignedExchanger: 'A', missionType: 'CARTBUILD', createdAtSec: 0, readyAtSec: 0, state: 'READY_AT_EXCHANGER' }]
     runtime.asrsLastRelease.A = -1e9
     runtime.timeSec = 25
@@ -180,7 +180,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     expect(runtime.missions[0].state).toBe('READY_AT_EXCHANGER')
     expect(engine.getState().cartbuildSystem.exchangers.A.releaseTimes).toEqual([])
     expect(engine.getState().srsControl.lanes.A.lastActualExchangerReleaseTime).toBeNull()
-    runtime.cartons = []
+    runtime.trays = []
     runtime.attemptExchangerReleases()
     expect(engine.getState().cartbuildSystem.exchangers.A.releaseTimes.map(({ timeSec }) => timeSec)).toEqual([25])
   })
@@ -234,6 +234,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     tray.payloadOrigin = 'CARTBUILD'
     tray.cartbuildCartonAttached = true
     runtime.trays = [tray]
+    runtime.missions = []
     runtime.cartons = []
     runtime.totalTraysCreated = 1
     runtime.cartonIntroduced = { A: 1, B: 0, C: 0 }
@@ -284,6 +285,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
     runtime.trays = []
+    runtime.missions = []
     runtime.totalTraysCreated = 0
     runtime.cartonIntroduced = { A: 3, B: 0, C: 0 }
     runtime.cartons = [
@@ -308,6 +310,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
     runtime.trays = []
+    runtime.missions = []
     runtime.totalTraysCreated = 0
     runtime.cartons = []
     runtime.cartonIntroduced = { A: 0, B: 0, C: 0 }

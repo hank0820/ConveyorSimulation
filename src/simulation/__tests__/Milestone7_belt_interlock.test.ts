@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import SimulationEngine from '../SimulationEngine'
-import type { SourceId, Tray } from '../types'
+import type { Mission, SourceId, Tray } from '../types'
 
 const SEGMENTS = [
   { id: 'A1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 24 },
@@ -13,6 +13,7 @@ const SEGMENTS = [
 
 type Runtime = {
   trays: Tray[]
+  missions: Mission[]
   totalTraysCreated: number
   consumedCount: number
   nextConsumptionTime: number
@@ -56,6 +57,7 @@ describe('Milestone 7 mechanically coupled middle-belt interlock', () => {
         tray(4, source, pileId, 'MDR_UPSTREAM', 6),
         tray(5, source, pileId, 'MDR_DOWNSTREAM', 0),
       ]
+      runtime.missions = []
       runtime.totalTraysCreated = runtime.trays.length
       runtime.consumedCount = 0
       runtime.nextConsumptionTime = Number.MAX_VALUE

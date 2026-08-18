@@ -1025,6 +1025,12 @@ export class SimulationEngine {
       sources,
       mergeState: { ...this.mergeState },
       missions: this.missions.map(m => ({ ...m })),
+      asrsRobotSystem: {
+        outboundRobots: [], maturedQueues: { A: [], B: [], C: [] }, robotCarriedTrayCount: 0, completedOutboundCycles: [], completedCycles: [],
+        inboundReservations: [], inboundOnlyRobots: [], returningRobots: [], cancelledInboundOnlyRobots: [],
+        completedCountByClassification: { OUTBOUND_ONLY: 0, INBOUND_ONLY: 0, DUAL_CYCLE: 0, CANCELLED_INBOUND_ONLY: 0 }, dualCyclePercentage: 0,
+        exchangers: Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => [source, { source, dropRobotId: null, shiftingOrTakeRobotId: null, dropBlocked: false, dropBlockedReason: null, dropBlockedDurationSec: 0, lastSuccessfulDropTime: null, nextEligibleCycleAdmissionTime: 0, queue: [], queueLength: 0, maximumObservedQueueLength: 0, queueAdvancementState: 'IDLE', queueAdvanceProgress: 0, successfulOutboundOnlyCycleCount: 0, currentQueueDepth: 0, completedCountByClassification: { OUTBOUND_ONLY: 0, INBOUND_ONLY: 0, DUAL_CYCLE: 0, CANCELLED_INBOUND_ONLY: 0 }, dualCyclePercentage: 0 }])) as unknown as SimulationStateWithProgress['asrsRobotSystem']['exchangers'],
+      },
       korber: {
         lastConsumptionTime: this.korberLastConsumption === -Number.MAX_VALUE ? null : this.korberLastConsumption,
         totalConsumed: this.korberTotalConsumed,
@@ -1081,9 +1087,9 @@ export class SimulationEngine {
         enabled: false,
         settings: this.getOperatingSettings(),
         lanes: {
-          CARTBUILD_A: { id: 'CARTBUILD_A', enabled: false, lengthFt: 75, zoneCount: 30, speedFtPerMin: 120, zoneTransferSec: 1.25, markers: [], occupancy: 0, introducedCount: 0, operatorConsumedCount: 0, operatorConsumptionTimes: [], finalZoneOccupied: false, nextEligibleConsumptionTime: 0, lastConsumedTime: null, configuredRatePerHour: 450 },
-          CARTBUILD_B: { id: 'CARTBUILD_B', enabled: false, lengthFt: 75, zoneCount: 30, speedFtPerMin: 120, zoneTransferSec: 1.25, markers: [], occupancy: 0, introducedCount: 0, operatorConsumedCount: 0, operatorConsumptionTimes: [], finalZoneOccupied: false, nextEligibleConsumptionTime: 0, lastConsumedTime: null, configuredRatePerHour: 450 },
-          CARTBUILD_C: { id: 'CARTBUILD_C', enabled: false, lengthFt: 75, zoneCount: 30, speedFtPerMin: 120, zoneTransferSec: 1.25, markers: [], occupancy: 0, introducedCount: 0, operatorConsumedCount: 0, operatorConsumptionTimes: [], finalZoneOccupied: false, nextEligibleConsumptionTime: 0, lastConsumedTime: null, configuredRatePerHour: 450 },
+          CARTBUILD_A: { id: 'CARTBUILD_A', enabled: false, positionCapacity: 30, pendingMissionReservations: 0, attachedTrayReservations: 0, physicalLaneOccupancy: 0, committedPositions: 0, availablePositions: 30, lengthFt: 75, zoneCount: 30, speedFtPerMin: 120, zoneTransferSec: 1.25, markers: [], occupancy: 0, introducedCount: 0, operatorConsumedCount: 0, operatorConsumptionTimes: [], finalZoneOccupied: false, nextEligibleConsumptionTime: 0, lastConsumedTime: null, configuredRatePerHour: 450 },
+          CARTBUILD_B: { id: 'CARTBUILD_B', enabled: false, positionCapacity: 30, pendingMissionReservations: 0, attachedTrayReservations: 0, physicalLaneOccupancy: 0, committedPositions: 0, availablePositions: 30, lengthFt: 75, zoneCount: 30, speedFtPerMin: 120, zoneTransferSec: 1.25, markers: [], occupancy: 0, introducedCount: 0, operatorConsumedCount: 0, operatorConsumptionTimes: [], finalZoneOccupied: false, nextEligibleConsumptionTime: 0, lastConsumedTime: null, configuredRatePerHour: 450 },
+          CARTBUILD_C: { id: 'CARTBUILD_C', enabled: false, positionCapacity: 30, pendingMissionReservations: 0, attachedTrayReservations: 0, physicalLaneOccupancy: 0, committedPositions: 0, availablePositions: 30, lengthFt: 75, zoneCount: 30, speedFtPerMin: 120, zoneTransferSec: 1.25, markers: [], occupancy: 0, introducedCount: 0, operatorConsumedCount: 0, operatorConsumptionTimes: [], finalZoneOccupied: false, nextEligibleConsumptionTime: 0, lastConsumedTime: null, configuredRatePerHour: 450 },
         },
         exchangers: {
           A: { source: 'A', cartbuildEnabled: false, lastActualReleaseTime: null, nextEligibleReleaseTime: 0, loadedReleases: 0, emptyReleases: 0, blockedLoadedAttempts: 0, blockedEmptyAttempts: 0, pendingEmptyMissions: 0, mostRecentReleaseType: null, releaseTimes: [] },

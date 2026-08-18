@@ -4,11 +4,14 @@ import type {
   BeltDiagnostic,
   CartbuildLaneId,
   CartonMarker,
+  CompletedOutboundCycle,
   ConveyorSegmentConfig,
   MergeState,
   Mission,
   MissionType,
   OperatingSettings,
+  OutboundRobotBlockedReason,
+  OutboundRobotLifecycleState,
   PurgeBatchState,
   ReturnDestination,
   ReturnedTrayRecord,
@@ -17,6 +20,7 @@ import type {
   SourceState,
   SrsPileId,
   Tray,
+  TrayLoadState,
 } from './types'
 
 const EPS = 1e-9
@@ -39,6 +43,74 @@ const DEFAULT_SETTINGS = (): OperatingSettings => ({ korberEnabled: true, cartbu
 const laneFor = (source: SourceId): CartbuildLaneId => `CARTBUILD_${source}` as CartbuildLaneId
 const settingFor = (source: SourceId): keyof OperatingSettings => `cartbuild${source}Enabled` as keyof OperatingSettings
 
+type OutboundMission = Mission & {
+  robotId?: number
+  robotState?: OutboundRobotLifecycleState
+  robotPayload?: Tray
+  payloadTrayId?: number
+  payloadLoadState?: 'EMPTY' | 'FULL'
+  payloadCartbuildCartonAttached?: boolean
+  robotBlockedReason?: OutboundRobotBlockedReason | null
+  robotBlockedDurationSec?: number
+  robotBlockedSinceSec?: number
+  queueEntryTimeSec?: number
+  dropEntryTimeSec?: number
+  successfulDropTimeSec?: number
+  takeArrivalTimeSec?: number
+  inboundPayload?: Tray
+  inboundTrayId?: number
+  inboundTrayLoadState?: TrayLoadState
+  takePickupTimeSec?: number
+  returnStartedAtSec?: number
+  rackArrivalTimeSec?: number
+  cycleType?: 'OUTBOUND_ONLY' | 'DUAL_CYCLE'
+}
+
+type InboundMission = {
+  missionId: number
+  robotId: number
+  assignedExchanger: SourceId
+  reservedTrayId: number
+  reservedLoadState: TrayLoadState
+  assignedAtSec: number
+  maturityTimeSec: number
+  robotState: 'TRAVELING_TO_DROP' | 'QUEUED_FOR_DROP' | 'HEAD_OF_DROP_QUEUE' | 'AT_DROP' | 'SHIFTING_TO_TAKE' | 'RETURNING_TO_RACK' | 'INBOUND_COMPLETE' | 'CANCELLED'
+  queueEntryTimeSec?: number
+  dropEntryTimeSec?: number
+  successfulDropTimeSec?: number
+  takeArrivalTimeSec?: number
+  takePickupTimeSec?: number
+  returnStartedAtSec?: number
+  rackArrivalTimeSec?: number
+  inboundPayload?: Tray
+  cancellationTimeSec?: number
+  cancellationReason?: 'CLAIMED_BY_OUTBOUND_ROBOT'
+  cancelledAfterAdmission: boolean
+  historyRecorded: boolean
+}
+
+type QueuedRobot =
+  | { kind: 'OUTBOUND'; mission: OutboundMission }
+  | { kind: 'INBOUND_ONLY'; mission: InboundMission }
+
+type ExchangerStation = {
+  dropMissionId: number | null
+  dropRobotKind: 'OUTBOUND' | 'INBOUND_ONLY' | null
+  shiftingMissionId: number | null
+  shiftingRobotKind: 'OUTBOUND' | 'INBOUND_ONLY' | null
+  shiftStartedAtSec: number | null
+  queueAdvanceStartedAtSec: number | null
+  queueAdvanceRobotIds: number[]
+  maximumObservedQueueLength: number
+  completedCycles: CompletedOutboundCycle[]
+}
+
+const createExchangerStations = (): Record<SourceId, ExchangerStation> => ({
+  A: { dropMissionId: null, dropRobotKind: null, shiftingMissionId: null, shiftingRobotKind: null, shiftStartedAtSec: null, queueAdvanceStartedAtSec: null, queueAdvanceRobotIds: [], maximumObservedQueueLength: 0, completedCycles: [] },
+  B: { dropMissionId: null, dropRobotKind: null, shiftingMissionId: null, shiftingRobotKind: null, shiftStartedAtSec: null, queueAdvanceStartedAtSec: null, queueAdvanceRobotIds: [], maximumObservedQueueLength: 0, completedCycles: [] },
+  C: { dropMissionId: null, dropRobotKind: null, shiftingMissionId: null, shiftingRobotKind: null, shiftStartedAtSec: null, queueAdvanceStartedAtSec: null, queueAdvanceRobotIds: [], maximumObservedQueueLength: 0, completedCycles: [] },
+})
+
 const SOURCE_STATES: SourceState[] = (['A', 'B', 'C'] as SourceId[]).map((id) => ({
   id,
   enabled: true,
@@ -59,13 +131,17 @@ export default class Milestone7Simulation {
   private consumedCount = 0
   private segments: ConveyorSegmentConfig[]
   private piles = new Map<string, HybridAccumulationPile>()
-  private missions: Mission[] = []
+  private missions: OutboundMission[] = []
+  private inboundMissions: InboundMission[] = []
+  private inboundReservations = new Map<number, number>()
   private missionCounter = 0
+  private robotCounter = 0
   private asrsNextAssign: SourceId = 'A'
   private planningCadenceSec = DEFAULT_PLANNING_CADENCE_SEC
   private nextPlanningTime = 0
   private asrsAssigned: Record<SourceId, number> = { A: 0, B: 0, C: 0 }
   private asrsLastRelease: Record<SourceId, number> = { A: -1e9, B: -1e9, C: -1e9 }
+  private exchangerStations = createExchangerStations()
   private sources = SOURCE_STATES.map((source) => ({ ...source }))
   private slugCursor: SourceId = 'A'
   private activeSlug: ActiveSlugState | null = null
@@ -87,6 +163,7 @@ export default class Milestone7Simulation {
   private returnMergeCounts = { eToXFull: 0, purgeToXEmpty: 0, blockedE: 0, blockedPurge: 0 }
   private exchangerAcceptanceTimes: Record<ReturnDestination, number[]> = { A2: [], B2: [], C2: [] }
   private cartbuildAvailable: boolean
+  private asrsReturnRobotsEnabled: boolean
   private operatingSettings: OperatingSettings = DEFAULT_SETTINGS()
   private cartons: CartonMarker[] = []
   private cartonMarkerCounter = 0
@@ -107,6 +184,7 @@ export default class Milestone7Simulation {
     this.segments = segments
     this.returnEnabled = RETURN_IDS.every((id) => segments.some((segment) => segment.id === id))
     this.cartbuildAvailable = CARTBUILD_LANES.every((id) => segments.some((segment) => segment.id === id))
+    this.asrsReturnRobotsEnabled = this.returnEnabled && this.cartbuildAvailable
     this.piles.set('A1', new HybridAccumulationPile({ pileId: 'A1', totalLengthFt: 81, upstreamMdrCount: 8, downstreamMdrCount: 15, beltLengthFt: 23.5, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
     this.piles.set('B1', new HybridAccumulationPile({ pileId: 'B1', totalLengthFt: 81, upstreamMdrCount: 8, downstreamMdrCount: 7, beltLengthFt: 43.5, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
     this.piles.set('C1', new HybridAccumulationPile({ pileId: 'C1', totalLengthFt: 81, upstreamMdrCount: 8, downstreamMdrCount: 7, beltLengthFt: 43.5, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
@@ -128,12 +206,16 @@ export default class Milestone7Simulation {
     this.totalTraysCreated = 0
     this.consumedCount = 0
     this.missions = []
+    this.inboundMissions = []
+    this.inboundReservations.clear()
     this.missionCounter = 0
+    this.robotCounter = 0
     this.asrsNextAssign = 'A'
     this.planningCadenceSec = planningCadenceSec
     this.nextPlanningTime = 0
     this.asrsAssigned = { A: 0, B: 0, C: 0 }
     this.asrsLastRelease = { A: -1e9, B: -1e9, C: -1e9 }
+    this.exchangerStations = createExchangerStations()
     this.sources = SOURCE_STATES.map((source) => ({ ...source }))
     this.slugCursor = 'A'
     this.activeSlug = null
@@ -415,6 +497,10 @@ export default class Milestone7Simulation {
 
   private processExchangerSinks() {
     if (!this.returnEnabled) return
+    if (this.asrsReturnRobotsEnabled) {
+      this.dispatchInboundOnlyRobots()
+      return
+    }
     for (const destination of RETURN_DESTINATIONS) {
       const final = this.zonedOccupancy(destination)[ZONE_COUNTS[destination] - 1]
       const times = this.exchangerAcceptanceTimes[destination]
@@ -723,10 +809,88 @@ export default class Milestone7Simulation {
     return Math.max(0, local + downstream - this.pendingDemand(source))
   }
 
+  private cartbuildReservation(source: SourceId) {
+    const laneId = laneFor(source)
+    const pendingMissionReservations = this.missions.filter((mission) =>
+      mission.assignedExchanger === source && mission.missionType === 'CARTBUILD' && mission.state !== 'RELEASED'
+    ).length
+    const attachedTrayReservations = this.trays.filter((tray) =>
+      tray.originSourceId === source && tray.payloadOrigin === 'CARTBUILD' && tray.cartbuildCartonAttached
+    ).length
+    const physicalLaneOccupancy = this.cartons.filter((carton) => carton.laneId === laneId).length
+    const committedPositions = pendingMissionReservations + attachedTrayReservations + physicalLaneOccupancy
+    return {
+      positionCapacity: CARTBUILD_ZONE_COUNT,
+      pendingMissionReservations,
+      attachedTrayReservations,
+      physicalLaneOccupancy,
+      committedPositions,
+      availablePositions: Math.max(0, CARTBUILD_ZONE_COUNT - committedPositions),
+    }
+  }
+
+  private dispatchInboundOnlyRobots() {
+    for (const destination of RETURN_DESTINATIONS) {
+      const source = destination[0] as SourceId
+      const tray = this.zonedOccupancy(destination)[ZONE_COUNTS[destination] - 1]
+      if (!tray || this.inboundReservations.has(tray.id)) continue
+      const station = this.exchangerStations[source]
+      const outboundCanService = station.dropRobotKind === 'OUTBOUND'
+        || station.shiftingRobotKind === 'OUTBOUND'
+        || this.missions.some((mission) => mission.assignedExchanger === source && mission.state === 'READY_AT_EXCHANGER')
+      if (outboundCanService) continue
+      const mission: InboundMission = {
+        missionId: ++this.missionCounter,
+        robotId: ++this.robotCounter,
+        assignedExchanger: source,
+        reservedTrayId: tray.id,
+        reservedLoadState: tray.loadState ?? 'EMPTY',
+        assignedAtSec: this.timeSec,
+        maturityTimeSec: this.timeSec + 180,
+        robotState: 'TRAVELING_TO_DROP',
+        cancelledAfterAdmission: false,
+        historyRecorded: false,
+      }
+      this.inboundMissions.push(mission)
+      this.inboundReservations.set(tray.id, mission.missionId)
+    }
+  }
+
   private missionTypeFor(source: SourceId): MissionType | undefined {
-    if (this.cartbuildAvailable && this.operatingSettings[settingFor(source)]) return 'CARTBUILD'
+    if (this.cartbuildAvailable && this.operatingSettings[settingFor(source)] && this.cartbuildReservation(source).availablePositions > 0) return 'CARTBUILD'
     if (this.operatingSettings.korberEnabled) return 'EMPTY'
     return undefined
+  }
+
+  private createRobotPayload(source: SourceId, missionType: MissionType) {
+    const isCartbuild = missionType === 'CARTBUILD'
+    const tray: Tray = {
+      id: ++this.totalTraysCreated,
+      currentSegmentId: 'ASRS_ROBOT',
+      positionFt: 0,
+      status: 'BLOCKED',
+      createdAtSec: this.timeSec,
+      originSourceId: source,
+      loadState: isCartbuild ? 'FULL' : 'EMPTY',
+      payloadOrigin: isCartbuild ? 'CARTBUILD' : undefined,
+      cartbuildCartonAttached: isCartbuild || undefined,
+    }
+    if (isCartbuild) this.cartonIntroduced[source] += 1
+    return tray
+  }
+
+  private attachRobotToMission(mission: OutboundMission) {
+    if (mission.robotId !== undefined && mission.robotPayload) return mission
+    const payload = this.createRobotPayload(mission.assignedExchanger, mission.missionType)
+    mission.robotId = ++this.robotCounter
+    mission.robotState = mission.state === 'RETRIEVING' ? 'TRAVELING_OUTBOUND' : 'QUEUED_FOR_DROP'
+    mission.robotPayload = payload
+    mission.payloadTrayId = payload.id
+    mission.payloadLoadState = payload.loadState ?? 'EMPTY'
+    mission.payloadCartbuildCartonAttached = Boolean(payload.cartbuildCartonAttached)
+    mission.robotBlockedReason = null
+    mission.robotBlockedDurationSec = 0
+    return mission
   }
 
   private planPendingDemandIfDue() {
@@ -756,54 +920,263 @@ export default class Milestone7Simulation {
         }
       }
       if (!selected || !missionType) return
-      this.missions.push({
+      const mission: OutboundMission = {
         missionId: ++this.missionCounter, assignedExchanger: selected, missionType,
         createdAtSec: this.timeSec, readyAtSec: this.timeSec + 180, state: 'RETRIEVING',
-      })
+      }
+      this.attachRobotToMission(mission)
+      this.missions.push(mission)
       this.asrsAssigned[selected] += 1
       this.asrsNextAssign = selected === 'A' ? 'B' : selected === 'B' ? 'C' : 'A'
     }
   }
 
   private matureMissions() {
-    for (const mission of this.missions) if (mission.state === 'RETRIEVING' && this.timeSec + EPS >= mission.readyAtSec) mission.state = 'READY_AT_EXCHANGER'
+    for (const mission of this.missions) {
+      if (mission.state !== 'RETRIEVING' || this.timeSec + EPS < mission.readyAtSec) continue
+      mission.state = 'READY_AT_EXCHANGER'
+      mission.robotState = 'QUEUED_FOR_DROP'
+      mission.queueEntryTimeSec = mission.readyAtSec
+    }
+    for (const mission of this.inboundMissions) {
+      if (mission.robotState !== 'TRAVELING_TO_DROP' || this.timeSec + EPS < mission.maturityTimeSec) continue
+      mission.robotState = 'QUEUED_FOR_DROP'
+      mission.queueEntryTimeSec = mission.maturityTimeSec
+    }
+  }
+
+  private maturedQueue(source: SourceId) {
+    const dropMissionId = this.exchangerStations[source].dropMissionId
+    return this.missions
+      .filter((mission) => mission.assignedExchanger === source && mission.state === 'READY_AT_EXCHANGER' && mission.missionId !== dropMissionId)
+      .sort((a, b) => Number(a.missionType === 'EMPTY') - Number(b.missionType === 'EMPTY') || a.createdAtSec - b.createdAtSec || a.missionId - b.missionId)
+  }
+
+  private exchangerQueue(source: SourceId): QueuedRobot[] {
+    const station = this.exchangerStations[source]
+    const outbound: QueuedRobot[] = this.maturedQueue(source).map((mission) => ({ kind: 'OUTBOUND', mission }))
+    const inbound: QueuedRobot[] = this.inboundMissions
+      .filter((mission) => mission.assignedExchanger === source
+        && (mission.robotState === 'QUEUED_FOR_DROP' || mission.robotState === 'HEAD_OF_DROP_QUEUE')
+        && mission.missionId !== station.dropMissionId)
+      .sort((a, b) => (a.queueEntryTimeSec ?? a.maturityTimeSec) - (b.queueEntryTimeSec ?? b.maturityTimeSec) || a.missionId - b.missionId)
+      .map((mission) => ({ kind: 'INBOUND_ONLY', mission }))
+    return [...outbound, ...inbound]
+  }
+
+  private currentDropBlockedDuration(mission: OutboundMission) {
+    return (mission.robotBlockedDurationSec ?? 0) + (mission.robotBlockedSinceSec === undefined ? 0 : Math.max(0, this.timeSec - mission.robotBlockedSinceSec))
+  }
+
+  private completeDropBlock(mission: OutboundMission) {
+    mission.robotBlockedDurationSec = this.currentDropBlockedDuration(mission)
+    mission.robotBlockedSinceSec = undefined
+    mission.robotBlockedReason = null
+  }
+
+  private takeInboundTray(source: SourceId, reservedTrayId?: number): Tray | undefined {
+    const destination = `${source}2` as ReturnDestination
+    const tray = this.zonedOccupancy(destination)[ZONE_COUNTS[destination] - 1]
+    if (!tray || (reservedTrayId !== undefined && tray.id !== reservedTrayId)) return undefined
+    const index = this.trays.indexOf(tray)
+    if (index < 0) return undefined
+    this.trays.splice(index, 1)
+    tray.currentSegmentId = `ASRS_RETURN_${source}`
+    tray.positionFt = 0
+    tray.status = 'MOVING'
+    tray.zonePlacement = undefined
+    tray.pilePlacement = undefined
+    tray.pileRuntime = undefined
+    return tray
+  }
+
+  private recordCompletedCycle(source: SourceId, cycle: CompletedOutboundCycle) {
+    this.exchangerStations[source].completedCycles.push(cycle)
+  }
+
+  private cancelInboundReservation(trayId: number, atSec = this.timeSec) {
+    const inboundMissionId = this.inboundReservations.get(trayId)
+    if (inboundMissionId === undefined) return
+    const mission = this.inboundMissions.find((candidate) => candidate.missionId === inboundMissionId)
+    this.inboundReservations.delete(trayId)
+    if (!mission || mission.robotState === 'CANCELLED' || mission.robotState === 'INBOUND_COMPLETE') return
+    mission.cancellationTimeSec = atSec
+    mission.cancellationReason = 'CLAIMED_BY_OUTBOUND_ROBOT'
+    mission.cancelledAfterAdmission = mission.robotState === 'AT_DROP' || mission.robotState === 'SHIFTING_TO_TAKE'
+    if (mission.cancelledAfterAdmission) return
+    mission.robotState = 'CANCELLED'
+    if (!mission.historyRecorded) {
+      this.recordCompletedCycle(mission.assignedExchanger, {
+        robotId: mission.robotId, missionId: mission.missionId, missionType: 'INBOUND_ONLY', exchanger: mission.assignedExchanger,
+        payloadTrayId: null, payloadLoadState: null, assignmentTimeSec: mission.assignedAtSec, maturityTimeSec: mission.maturityTimeSec,
+        queueEntryTimeSec: mission.queueEntryTimeSec ?? mission.maturityTimeSec, dropEntryTimeSec: mission.dropEntryTimeSec ?? mission.cancellationTimeSec,
+        successfulDropTimeSec: null, takeArrivalTimeSec: mission.cancellationTimeSec, totalDropBlockedDurationSec: 0,
+        cycleType: 'CANCELLED_INBOUND_ONLY', inboundTrayId: null, inboundTrayLoadState: null, takePickupTimeSec: null,
+        returnStartedAtSec: mission.cancellationTimeSec, rackArrivalTimeSec: mission.cancellationTimeSec,
+        cancellationTimeSec: mission.cancellationTimeSec, cancellationReason: mission.cancellationReason, cancelledAfterAdmission: false,
+      })
+      mission.historyRecorded = true
+    }
+  }
+
+  private completeRobotShift(source: SourceId) {
+    const station = this.exchangerStations[source]
+    if (station.shiftingMissionId === null || station.shiftStartedAtSec === null || this.timeSec + EPS < station.shiftStartedAtSec + 1) return
+    const takeTime = station.shiftStartedAtSec + 1
+    if (station.shiftingRobotKind === 'OUTBOUND') {
+      const mission = this.missions.find(({ missionId }) => missionId === station.shiftingMissionId)!
+      const candidate = this.zonedOccupancy(`${source}2` as ReturnDestination)[ZONE_COUNTS[`${source}2` as ReturnDestination] - 1]
+      if (candidate) this.cancelInboundReservation(candidate.id, takeTime)
+      const tray = this.takeInboundTray(source)
+      mission.takeArrivalTimeSec = takeTime
+      mission.takePickupTimeSec = tray ? takeTime : undefined
+      mission.inboundPayload = tray
+      mission.inboundTrayId = tray?.id
+      mission.inboundTrayLoadState = tray?.loadState ?? undefined
+      mission.cycleType = tray ? 'DUAL_CYCLE' : 'OUTBOUND_ONLY'
+      mission.returnStartedAtSec = takeTime
+      mission.rackArrivalTimeSec = takeTime + 10
+      mission.robotState = 'RETURNING_TO_RACK'
+    } else {
+      const mission = this.inboundMissions.find(({ missionId }) => missionId === station.shiftingMissionId)!
+      const tray = mission.cancellationTimeSec === undefined ? this.takeInboundTray(source, mission.reservedTrayId) : undefined
+      this.inboundReservations.delete(mission.reservedTrayId)
+      mission.takeArrivalTimeSec = takeTime
+      mission.takePickupTimeSec = tray ? takeTime : undefined
+      mission.inboundPayload = tray
+      mission.returnStartedAtSec = takeTime
+      mission.rackArrivalTimeSec = takeTime + 10
+      mission.robotState = 'RETURNING_TO_RACK'
+    }
+    station.shiftingMissionId = null
+    station.shiftingRobotKind = null
+    station.shiftStartedAtSec = null
+  }
+
+  private processRobotReturns() {
+    for (const mission of this.missions) {
+      if (mission.robotState !== 'RETURNING_TO_RACK' || mission.rackArrivalTimeSec === undefined || this.timeSec + EPS < mission.rackArrivalTimeSec) continue
+      const tray = mission.inboundPayload
+      if (tray) {
+        this.returnedHistory.push({ trayId: tray.id, loadState: tray.loadState ?? 'EMPTY', destination: `${mission.assignedExchanger}2`, acceptedAtSec: mission.rackArrivalTimeSec, payloadOrigin: tray.payloadOrigin, cartbuildCartonAttached: tray.cartbuildCartonAttached })
+        this.exchangerAcceptanceTimes[`${mission.assignedExchanger}2`].push(mission.rackArrivalTimeSec)
+      }
+      mission.inboundPayload = undefined
+      mission.robotState = 'OUTBOUND_COMPLETE'
+      this.recordCompletedCycle(mission.assignedExchanger, {
+        robotId: mission.robotId!, missionId: mission.missionId, missionType: mission.missionType, exchanger: mission.assignedExchanger,
+        payloadTrayId: mission.payloadTrayId!, payloadLoadState: mission.payloadLoadState!, assignmentTimeSec: mission.createdAtSec,
+        maturityTimeSec: mission.readyAtSec, queueEntryTimeSec: mission.queueEntryTimeSec ?? mission.readyAtSec,
+        dropEntryTimeSec: mission.dropEntryTimeSec!, successfulDropTimeSec: mission.successfulDropTimeSec!,
+        takeArrivalTimeSec: mission.takeArrivalTimeSec!, totalDropBlockedDurationSec: mission.robotBlockedDurationSec ?? 0,
+        cycleType: mission.cycleType ?? 'OUTBOUND_ONLY', inboundTrayId: mission.inboundTrayId ?? null,
+        inboundTrayLoadState: mission.inboundTrayLoadState ?? null, takePickupTimeSec: mission.takePickupTimeSec ?? null,
+        returnStartedAtSec: mission.returnStartedAtSec!, rackArrivalTimeSec: mission.rackArrivalTimeSec,
+        cancellationTimeSec: null, cancellationReason: null, cancelledAfterAdmission: false,
+      })
+    }
+    for (const mission of this.inboundMissions) {
+      if (mission.robotState !== 'RETURNING_TO_RACK' || mission.rackArrivalTimeSec === undefined || this.timeSec + EPS < mission.rackArrivalTimeSec) continue
+      const tray = mission.inboundPayload
+      if (tray) {
+        this.returnedHistory.push({ trayId: tray.id, loadState: tray.loadState ?? 'EMPTY', destination: `${mission.assignedExchanger}2`, acceptedAtSec: mission.rackArrivalTimeSec, payloadOrigin: tray.payloadOrigin, cartbuildCartonAttached: tray.cartbuildCartonAttached })
+        this.exchangerAcceptanceTimes[`${mission.assignedExchanger}2`].push(mission.rackArrivalTimeSec)
+      }
+      mission.inboundPayload = undefined
+      mission.robotState = 'INBOUND_COMPLETE'
+      if (!mission.historyRecorded) {
+        this.recordCompletedCycle(mission.assignedExchanger, {
+          robotId: mission.robotId, missionId: mission.missionId, missionType: 'INBOUND_ONLY', exchanger: mission.assignedExchanger,
+          payloadTrayId: null, payloadLoadState: null, assignmentTimeSec: mission.assignedAtSec, maturityTimeSec: mission.maturityTimeSec,
+          queueEntryTimeSec: mission.queueEntryTimeSec ?? mission.maturityTimeSec, dropEntryTimeSec: mission.dropEntryTimeSec!,
+          successfulDropTimeSec: mission.successfulDropTimeSec ?? null, takeArrivalTimeSec: mission.takeArrivalTimeSec!, totalDropBlockedDurationSec: 0,
+          cycleType: mission.cancellationTimeSec === undefined ? 'INBOUND_ONLY' : 'CANCELLED_INBOUND_ONLY',
+          inboundTrayId: tray?.id ?? null, inboundTrayLoadState: tray?.loadState ?? null, takePickupTimeSec: mission.takePickupTimeSec ?? null,
+          returnStartedAtSec: mission.returnStartedAtSec!, rackArrivalTimeSec: mission.rackArrivalTimeSec,
+          cancellationTimeSec: mission.cancellationTimeSec ?? null, cancellationReason: mission.cancellationReason ?? null,
+          cancelledAfterAdmission: mission.cancelledAfterAdmission,
+        })
+        mission.historyRecorded = true
+      }
+    }
+  }
+
+  private dropRobotPayload(mission: OutboundMission, source: SourceId) {
+    const station = this.exchangerStations[source]
+    const robot = this.attachRobotToMission(mission)
+    const tray = robot.robotPayload!
+    tray.currentSegmentId = `${source}1`
+    tray.positionFt = ZONE_LENGTH_FT / 2
+    tray.status = 'BLOCKED'
+    tray.pilePlacement = { pileId: `${source}1`, component: 'MDR_UPSTREAM', zoneIndex: 0 }
+    this.trays.push(tray)
+    robot.robotPayload = undefined
+    this.completeDropBlock(robot)
+    robot.robotState = 'SHIFTING_TO_TAKE'
+    robot.successfulDropTimeSec = this.timeSec
+    mission.state = 'RELEASED'
+    this.recordOutboundRelease(source, tray, mission.missionType === 'CARTBUILD' ? 'LOADED' : 'EMPTY')
+    station.dropMissionId = null
+    station.dropRobotKind = null
+    station.shiftingMissionId = mission.missionId
+    station.shiftingRobotKind = 'OUTBOUND'
+    station.shiftStartedAtSec = this.timeSec
+    const remainingQueue = this.exchangerQueue(source)
+    station.queueAdvanceStartedAtSec = remainingQueue.length ? this.timeSec : null
+    station.queueAdvanceRobotIds = remainingQueue.map(({ mission: queuedMission }) => queuedMission.robotId!)
+  }
+
+  private blockRobot(mission: OutboundMission, reason: OutboundRobotBlockedReason) {
+    if (mission.robotBlockedSinceSec === undefined) mission.robotBlockedSinceSec = this.timeSec
+    mission.robotState = 'BLOCKED_FROM_DROP'
+    mission.robotBlockedReason = reason
   }
 
   private attemptExchangerReleases() {
+    for (const source of ['A', 'B', 'C'] as SourceId[]) this.completeRobotShift(source)
+    this.processRobotReturns()
     for (const source of ['A', 'B', 'C'] as SourceId[]) {
+      const station = this.exchangerStations[source]
       const pileId = `${source}1`
       const occupied = this.trays.some((tray) => tray.pilePlacement?.pileId === pileId && tray.pilePlacement.component === 'MDR_UPSTREAM' && tray.pilePlacement.zoneIndex === 0)
-      if (this.timeSec - this.asrsLastRelease[source] < CARTBUILD_INTERVAL_SEC - EPS) continue
       const diagnostics = this.outboundDiagnostics[source]
-      const cartonEntranceOpen = !this.cartonOccupancy(laneFor(source))[0]
-      const matured = (missionType: MissionType) => this.missions
-        .filter((mission) => mission.assignedExchanger === source && mission.missionType === missionType && mission.state === 'READY_AT_EXCHANGER')
-        .sort((a, b) => a.createdAtSec - b.createdAtSec || a.missionId - b.missionId)[0]
-      const cartbuildMission = matured('CARTBUILD')
-      const emptyMission = matured('EMPTY')
-      if (cartbuildMission && !occupied && cartonEntranceOpen) {
-        const tray: Tray = {
-          id: ++this.totalTraysCreated, currentSegmentId: pileId, positionFt: ZONE_LENGTH_FT / 2, status: 'BLOCKED', createdAtSec: this.timeSec,
-          originSourceId: source, loadState: 'FULL', payloadOrigin: 'CARTBUILD', cartbuildCartonAttached: true,
-          pilePlacement: { pileId, component: 'MDR_UPSTREAM', zoneIndex: 0 },
-        }
-        this.trays.push(tray)
-        this.cartonIntroduced[source] += 1
-        cartbuildMission.state = 'RELEASED'
-        this.recordOutboundRelease(source, tray, 'LOADED')
+      const queue = this.exchangerQueue(source)
+      station.maximumObservedQueueLength = Math.max(station.maximumObservedQueueLength, queue.length)
+      for (const [index, entry] of queue.entries()) {
+        entry.mission.robotState = index === 0 ? 'HEAD_OF_DROP_QUEUE' : 'QUEUED_FOR_DROP'
+        if (entry.kind === 'OUTBOUND') entry.mission.robotBlockedReason = null
+      }
+      if (station.dropMissionId === null && this.timeSec - this.asrsLastRelease[source] >= CARTBUILD_INTERVAL_SEC - EPS && queue.length) {
+        const selected = queue[0]
+        station.dropMissionId = selected.mission.missionId
+        station.dropRobotKind = selected.kind
+        selected.mission.dropEntryTimeSec = this.timeSec
+        selected.mission.robotState = 'AT_DROP'
+      }
+      if (station.dropMissionId === null) continue
+      if (station.dropRobotKind === 'INBOUND_ONLY') {
+        const inbound = this.inboundMissions.find(({ missionId }) => missionId === station.dropMissionId)!
+        inbound.successfulDropTimeSec = this.timeSec
+        inbound.robotState = 'SHIFTING_TO_TAKE'
+        this.asrsLastRelease[source] = this.timeSec
+        station.dropMissionId = null
+        station.dropRobotKind = null
+        station.shiftingMissionId = inbound.missionId
+        station.shiftingRobotKind = 'INBOUND_ONLY'
+        station.shiftStartedAtSec = this.timeSec
+        const remainingQueue = this.exchangerQueue(source)
+        station.queueAdvanceStartedAtSec = remainingQueue.length ? this.timeSec : null
+        station.queueAdvanceRobotIds = remainingQueue.map(({ mission }) => mission.robotId!)
         continue
       }
-      if (cartbuildMission) diagnostics.blockedLoadedAttempts += 1
-
-      if (!emptyMission) continue
+      const dropMission = this.missions.find(({ missionId }) => missionId === station.dropMissionId)!
       if (occupied) {
-        diagnostics.blockedEmptyAttempts += 1
+        if (dropMission.missionType === 'CARTBUILD') diagnostics.blockedLoadedAttempts += 1
+        else diagnostics.blockedEmptyAttempts += 1
+        this.blockRobot(dropMission, 'PILE_ENTRANCE_OCCUPIED')
         continue
       }
-      const tray: Tray = { id: ++this.totalTraysCreated, currentSegmentId: pileId, positionFt: ZONE_LENGTH_FT / 2, status: 'BLOCKED', createdAtSec: this.timeSec, originSourceId: source, loadState: 'EMPTY', pilePlacement: { pileId, component: 'MDR_UPSTREAM', zoneIndex: 0 } }
-      this.trays.push(tray)
-      emptyMission.state = 'RELEASED'
-      this.recordOutboundRelease(source, tray, 'EMPTY')
+      this.dropRobotPayload(dropMission, source)
     }
   }
 
@@ -826,7 +1199,10 @@ export default class Milestone7Simulation {
     const retrieving = (source: SourceId) => this.missions.filter((mission) => mission.assignedExchanger === source && mission.state === 'RETRIEVING').length
     const ready = (source: SourceId) => this.missions.filter((mission) => mission.assignedExchanger === source && mission.state === 'READY_AT_EXCHANGER').length
     const pileCount = (source: SourceId, component: Tray['pilePlacement'] extends infer _ ? string : never) => this.trays.filter((tray) => tray.pilePlacement?.pileId === `${source}1` && tray.pilePlacement.component === component).length
-    const physical = this.trays.length
+    const robotCarriedTrayCount = this.missions.filter((mission) => Boolean(mission.robotPayload)).length
+      + this.missions.filter((mission) => Boolean(mission.inboundPayload)).length
+      + this.inboundMissions.filter((mission) => Boolean(mission.inboundPayload)).length
+    const physical = this.trays.length + robotCarriedTrayCount
     const mergeState: MergeState = {
       nextPriority: this.slugCursor,
       eligibleA: this.activeSlug?.source === 'A', eligibleB: this.activeSlug?.source === 'B', eligibleC: this.activeSlug?.source === 'C',
@@ -849,6 +1225,9 @@ export default class Milestone7Simulation {
     const returnedToAsrsCount = this.returnedHistory.length
     const materialSinkCount = this.returnEnabled ? returnedToAsrsCount : this.consumedCount
     const cartonAttached = this.trays.filter((tray) => tray.payloadOrigin === 'CARTBUILD' && tray.cartbuildCartonAttached).length
+      + this.missions.filter((mission) => mission.robotPayload?.payloadOrigin === 'CARTBUILD' && mission.robotPayload.cartbuildCartonAttached).length
+      + this.missions.filter((mission) => mission.inboundPayload?.payloadOrigin === 'CARTBUILD' && mission.inboundPayload.cartbuildCartonAttached).length
+      + this.inboundMissions.filter((mission) => mission.inboundPayload?.payloadOrigin === 'CARTBUILD' && mission.inboundPayload.cartbuildCartonAttached).length
     const cartonOnConveyors = this.cartons.length
     const cartonConsumed = (['A', 'B', 'C'] as SourceId[]).reduce((sum, source) => sum + this.operatorConsumptionTimes[source].length, 0)
     const cartonIntroduced = this.cartonIntroduced.A + this.cartonIntroduced.B + this.cartonIntroduced.C
@@ -857,8 +1236,10 @@ export default class Milestone7Simulation {
       const markers = this.cartons.filter((carton) => carton.laneId === id).map((carton) => ({ ...carton }))
       const times = this.operatorConsumptionTimes[source]
       const last = times.at(-1) ?? null
+      const reservation = this.cartbuildReservation(source)
       return [id, {
         id, enabled: this.cartbuildAvailable && this.operatingSettings[settingFor(source)], lengthFt: 75, zoneCount: CARTBUILD_ZONE_COUNT,
+        ...reservation,
         speedFtPerMin: 120, zoneTransferSec: ZONE_TRANSFER_SEC, markers, occupancy: markers.length,
         introducedCount: this.cartonIntroduced[source], operatorConsumedCount: times.length, operatorConsumptionTimes: [...times],
         finalZoneOccupied: markers.some((carton) => carton.zoneIndex === CARTBUILD_ZONE_COUNT - 1),
@@ -868,10 +1249,10 @@ export default class Milestone7Simulation {
     })) as SimulationStateWithProgress['cartbuildSystem']['lanes']
     const exchangerDiagnostics = Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => {
       const diagnostics = this.outboundDiagnostics[source]
-      const last = this.asrsLastRelease[source] < -1e8 ? null : this.asrsLastRelease[source]
+      const last = diagnostics.releaseTimes.at(-1)?.timeSec ?? null
       return [source, {
         source, cartbuildEnabled: this.cartbuildAvailable && this.operatingSettings[settingFor(source)], lastActualReleaseTime: last,
-        nextEligibleReleaseTime: last === null ? this.timeSec : last + CARTBUILD_INTERVAL_SEC,
+        nextEligibleReleaseTime: this.asrsLastRelease[source] < -1e8 ? this.timeSec : this.asrsLastRelease[source] + CARTBUILD_INTERVAL_SEC,
         loadedReleases: diagnostics.loadedReleases, emptyReleases: diagnostics.emptyReleases,
         blockedLoadedAttempts: diagnostics.blockedLoadedAttempts, blockedEmptyAttempts: diagnostics.blockedEmptyAttempts,
         pendingEmptyMissions: pending(source), mostRecentReleaseType: diagnostics.mostRecentReleaseType,
@@ -913,12 +1294,106 @@ export default class Milestone7Simulation {
         sourceBatchReleasedCount: active?.releasedCount ?? 0, sourceBatchRemainingCount: active ? active.authorizedCount - active.releasedCount : 0,
       }]
     })) as SimulationStateWithProgress['srsControl']['lanes']
+    const maturedQueues = Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => [source, this.maturedQueue(source).map((mission) => mission.robotId!).filter((robotId) => robotId !== undefined)])) as Record<SourceId, number[]>
+    const queuePositions = new Map<number, number>()
+    for (const source of ['A', 'B', 'C'] as SourceId[]) this.exchangerQueue(source).forEach(({ mission }, index) => queuePositions.set(mission.robotId!, index + 1))
+    const outboundRobots = this.missions
+      .filter((mission) => mission.robotId !== undefined && mission.payloadTrayId !== undefined && mission.payloadLoadState !== undefined)
+      .map((mission) => {
+        const currentPayload = mission.robotPayload ?? this.trays.find((tray) => tray.id === mission.payloadTrayId)
+        return {
+          robotId: mission.robotId!, missionId: mission.missionId, missionType: mission.missionType, assignedExchanger: mission.assignedExchanger,
+          lifecycleState: mission.robotState ?? 'TRAVELING_OUTBOUND', assignedAtSec: mission.createdAtSec, maturityTimeSec: mission.readyAtSec,
+          travelProgress: Math.max(0, Math.min(1, (this.timeSec - mission.createdAtSec) / Math.max(EPS, mission.readyAtSec - mission.createdAtSec))),
+          queuePosition: queuePositions.get(mission.robotId!) ?? null, blockedReason: mission.robotBlockedReason ?? null,
+          blockedDurationSec: this.currentDropBlockedDuration(mission), payloadTrayId: mission.payloadTrayId!, payloadLoadState: currentPayload?.loadState ?? mission.payloadLoadState!,
+          cartbuildCartonAttached: Boolean(currentPayload?.cartbuildCartonAttached), ownsPayload: Boolean(mission.robotPayload),
+          inboundTrayId: mission.inboundTrayId ?? null, inboundTrayLoadState: mission.inboundTrayLoadState ?? null,
+          takePickupTimeSec: mission.takePickupTimeSec ?? null, rackArrivalTimeSec: mission.robotState === 'OUTBOUND_COMPLETE' ? mission.rackArrivalTimeSec ?? null : null,
+          returnProgress: mission.returnStartedAtSec === undefined ? 0 : Math.max(0, Math.min(1, (this.timeSec - mission.returnStartedAtSec) / 10)),
+        }
+      })
+    const inboundReservations = [...this.inboundReservations.entries()].map(([trayId, missionId]) => {
+      const mission = this.inboundMissions.find((candidate) => candidate.missionId === missionId)!
+      const tray = this.trays.find((candidate) => candidate.id === trayId)
+      return { trayId, loadState: tray?.loadState ?? mission.reservedLoadState, exchanger: mission.assignedExchanger, robotId: mission.robotId, missionId, reservedAtSec: mission.assignedAtSec }
+    })
+    const inboundOnlyRobots = this.inboundMissions.map((mission) => ({
+      robotId: mission.robotId, missionId: mission.missionId, assignedExchanger: mission.assignedExchanger,
+      lifecycleState: mission.robotState, reservedTrayId: mission.reservedTrayId, assignedAtSec: mission.assignedAtSec,
+      maturityTimeSec: mission.maturityTimeSec, travelProgress: Math.max(0, Math.min(1, (this.timeSec - mission.assignedAtSec) / 180)),
+      queuePosition: queuePositions.get(mission.robotId) ?? null, cancellationTimeSec: mission.cancellationTimeSec ?? null,
+      cancellationReason: mission.cancellationReason ?? null, cancelledAfterAdmission: mission.cancelledAfterAdmission,
+      ownsInboundTray: Boolean(mission.inboundPayload), inboundTrayId: mission.inboundPayload?.id ?? null,
+      inboundTrayLoadState: mission.inboundPayload?.loadState ?? null, takePickupTimeSec: mission.takePickupTimeSec ?? null,
+      rackArrivalTimeSec: mission.robotState === 'INBOUND_COMPLETE' ? mission.rackArrivalTimeSec ?? null : null,
+      returnProgress: mission.returnStartedAtSec === undefined ? 0 : Math.max(0, Math.min(1, (this.timeSec - mission.returnStartedAtSec) / 10)),
+    }))
+    const returningRobots = [
+      ...this.missions.filter((mission) => mission.robotState === 'RETURNING_TO_RACK').map((mission) => ({
+        robotId: mission.robotId!, missionId: mission.missionId, robotKind: 'OUTBOUND' as const, exchanger: mission.assignedExchanger,
+        inboundTrayId: mission.inboundPayload?.id ?? null, inboundTrayLoadState: mission.inboundPayload?.loadState ?? null,
+        returnStartedAtSec: mission.returnStartedAtSec!, rackArrivalTimeSec: mission.rackArrivalTimeSec!,
+        returnProgress: Math.max(0, Math.min(1, (this.timeSec - mission.returnStartedAtSec!) / 10)),
+      })),
+      ...this.inboundMissions.filter((mission) => mission.robotState === 'RETURNING_TO_RACK').map((mission) => ({
+        robotId: mission.robotId, missionId: mission.missionId, robotKind: 'INBOUND_ONLY' as const, exchanger: mission.assignedExchanger,
+        inboundTrayId: mission.inboundPayload?.id ?? null, inboundTrayLoadState: mission.inboundPayload?.loadState ?? null,
+        returnStartedAtSec: mission.returnStartedAtSec!, rackArrivalTimeSec: mission.rackArrivalTimeSec!,
+        returnProgress: Math.max(0, Math.min(1, (this.timeSec - mission.returnStartedAtSec!) / 10)),
+      })),
+    ]
+    const cancelledInboundOnlyRobots = this.inboundMissions.filter((mission) => mission.cancellationTimeSec !== undefined).map((mission) => ({
+      robotId: mission.robotId, missionId: mission.missionId, exchanger: mission.assignedExchanger, reservedTrayId: mission.reservedTrayId,
+      cancellationTimeSec: mission.cancellationTimeSec!, cancellationReason: mission.cancellationReason!,
+      cancelledAfterAdmission: mission.cancelledAfterAdmission, rackArrivalTimeSec: mission.robotState === 'INBOUND_COMPLETE' ? mission.rackArrivalTimeSec ?? null : null,
+    }))
+    const exchangerPipelines = Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => {
+      const station = this.exchangerStations[source]
+      const queue = this.exchangerQueue(source)
+      const dropMission = station.dropMissionId === null ? undefined : station.dropRobotKind === 'OUTBOUND'
+        ? this.missions.find(({ missionId }) => missionId === station.dropMissionId)
+        : this.inboundMissions.find(({ missionId }) => missionId === station.dropMissionId)
+      const shiftingMission = station.shiftingMissionId === null ? undefined : station.shiftingRobotKind === 'OUTBOUND'
+        ? this.missions.find(({ missionId }) => missionId === station.shiftingMissionId)
+        : this.inboundMissions.find(({ missionId }) => missionId === station.shiftingMissionId)
+      const queueAdvanceProgress = station.queueAdvanceStartedAtSec === null ? 0 : Math.max(0, Math.min(1, this.timeSec - station.queueAdvanceStartedAtSec))
+      const stationCounts = { OUTBOUND_ONLY: 0, INBOUND_ONLY: 0, DUAL_CYCLE: 0, CANCELLED_INBOUND_ONLY: 0 }
+      for (const cycle of station.completedCycles) stationCounts[cycle.cycleType] += 1
+      const outboundCycleCount = stationCounts.OUTBOUND_ONLY + stationCounts.DUAL_CYCLE
+      return [source, {
+        source, dropRobotId: dropMission?.robotId ?? null, shiftingOrTakeRobotId: shiftingMission?.robotId ?? null,
+        dropBlocked: station.dropRobotKind === 'OUTBOUND' && dropMission?.robotState === 'BLOCKED_FROM_DROP',
+        dropBlockedReason: station.dropRobotKind === 'OUTBOUND' ? (dropMission as OutboundMission | undefined)?.robotBlockedReason ?? null : null,
+        dropBlockedDurationSec: station.dropRobotKind === 'OUTBOUND' && dropMission ? this.currentDropBlockedDuration(dropMission as OutboundMission) : 0,
+        lastSuccessfulDropTime: this.asrsLastRelease[source] < -1e8 ? null : this.asrsLastRelease[source],
+        nextEligibleCycleAdmissionTime: this.asrsLastRelease[source] < -1e8 ? 0 : this.asrsLastRelease[source] + CARTBUILD_INTERVAL_SEC,
+        queue: queue.map(({ kind, mission }) => ({ robotId: mission.robotId, missionId: mission.missionId, missionType: kind === 'OUTBOUND' ? (mission as OutboundMission).missionType : 'INBOUND_ONLY' as const })),
+        queueLength: queue.length, maximumObservedQueueLength: station.maximumObservedQueueLength,
+        queueAdvancementState: station.queueAdvanceStartedAtSec === null ? 'IDLE' : queueAdvanceProgress < 1 ? 'ADVANCING' : 'COMPLETE',
+        queueAdvanceProgress, successfulOutboundOnlyCycleCount: stationCounts.OUTBOUND_ONLY,
+        currentQueueDepth: queue.length, completedCountByClassification: stationCounts,
+        dualCyclePercentage: outboundCycleCount === 0 ? 0 : stationCounts.DUAL_CYCLE / outboundCycleCount * 100,
+      }]
+    })) as SimulationStateWithProgress['asrsRobotSystem']['exchangers']
+    const completedCycles = (['A', 'B', 'C'] as SourceId[]).flatMap((source) => this.exchangerStations[source].completedCycles.map((cycle) => ({ ...cycle })))
+    const completedOutboundCycles = completedCycles.filter((cycle) => cycle.missionType !== 'INBOUND_ONLY')
+    const completedCountByClassification = { OUTBOUND_ONLY: 0, INBOUND_ONLY: 0, DUAL_CYCLE: 0, CANCELLED_INBOUND_ONLY: 0 }
+    for (const cycle of completedCycles) completedCountByClassification[cycle.cycleType] += 1
+    const outboundCompletedCount = completedCountByClassification.OUTBOUND_ONLY + completedCountByClassification.DUAL_CYCLE
     return {
       timeSec: this.timeSec,
       trays: this.trays.map((tray) => ({ ...tray, pilePlacement: tray.pilePlacement ? { ...tray.pilePlacement } : undefined, zonePlacement: tray.zonePlacement ? { ...tray.zonePlacement } : undefined, pileRuntime: tray.pileRuntime ? { ...tray.pileRuntime } : undefined })),
       segments: this.segments.map((segment) => ({ ...segment })), sources: this.sources.map((source) => ({ ...source })), source: { ...this.sources[0] }, mergeState,
       korber: { lastConsumptionTime: this.returnEnabled ? (this.korberProcessedCount ? this.timeSec : null) : (this.consumedCount ? this.nextConsumptionTime - KORBER_INTERVAL_SEC : null), totalConsumed: this.returnEnabled ? this.korberProcessedCount : this.consumedCount, ready: this.timeSec + EPS >= this.nextConsumptionTime || this.korberStarved, starved: this.korberStarved },
-      missions: this.missions.map((mission) => ({ ...mission })), pendingA: pending('A'), pendingB: pending('B'), pendingC: pending('C'), retrievingA: retrieving('A'), retrievingB: retrieving('B'), retrievingC: retrieving('C'), readyA: ready('A'), readyB: ready('B'), readyC: ready('C'),
+      missions: this.missions.map((mission) => ({ missionId: mission.missionId, assignedExchanger: mission.assignedExchanger, missionType: mission.missionType, createdAtSec: mission.createdAtSec, readyAtSec: mission.readyAtSec, state: mission.state })),
+      asrsRobotSystem: {
+        outboundRobots, maturedQueues, robotCarriedTrayCount, exchangers: exchangerPipelines, completedOutboundCycles,
+        completedCycles, inboundReservations, inboundOnlyRobots, returningRobots, cancelledInboundOnlyRobots,
+        completedCountByClassification,
+        dualCyclePercentage: outboundCompletedCount === 0 ? 0 : completedCountByClassification.DUAL_CYCLE / outboundCompletedCount * 100,
+      },
+      pendingA: pending('A'), pendingB: pending('B'), pendingC: pending('C'), retrievingA: retrieving('A'), retrievingB: retrieving('B'), retrievingC: retrieving('C'), readyA: ready('A'), readyB: ready('B'), readyC: ready('C'),
       additionalASRSDemand: srsGlobalAvailable, globalTargetCount: SRS_GLOBAL_TARGET, globalCurrentCount: srsGlobalCurrent, transportInventory: this.zonedOccupancy('PRE_T').filter(Boolean).length + this.zonedOccupancy('T').filter(Boolean).length, physicalPreKorberInventory: physical,
       purgeDemandA: this.lanePurgeDemand('A', srsCurrent), purgeDemandB: this.lanePurgeDemand('B', srsCurrent), purgeDemandC: this.lanePurgeDemand('C', srsCurrent), asrsNextAssign: this.asrsNextAssign, asrsAssignedA: this.asrsAssigned.A, asrsAssignedB: this.asrsAssigned.B, asrsAssignedC: this.asrsAssigned.C,
       upstreamMdrA: pileCount('A', 'MDR_UPSTREAM'), beltCountA: pileCount('A', 'BELT'), downstreamMdrA: pileCount('A', 'MDR_DOWNSTREAM'), beltRunningA: beltDiagnostics[0].beltRunning,
