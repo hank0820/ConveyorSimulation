@@ -214,7 +214,7 @@ describe('ConveyorDiagram rendering integrity', () => {
 
   test('uses a fixed responsive viewBox and keeps rendered rectangles inside it without duplicate SVG IDs', () => {
     const markup = renderEngine(new SimulationEngine(RETURN_SEGMENTS))
-    expect(markup).toContain('viewBox="0 0 1600 850"')
+    expect(markup).toContain('viewBox="0 0 1600 1040"')
     expect(markup).toContain('preserveAspectRatio="xMidYMid meet"')
     const ids = [...markup.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1])
     expect(new Set(ids).size).toBe(ids.length)
@@ -223,7 +223,7 @@ describe('ConveyorDiagram rendering integrity', () => {
       expect(x).toBeGreaterThanOrEqual(0)
       expect(y).toBeGreaterThanOrEqual(0)
       expect(x + width).toBeLessThanOrEqual(1600)
-      expect(y + height).toBeLessThanOrEqual(850)
+      expect(y + height).toBeLessThanOrEqual(1040)
     }
   })
 
@@ -252,7 +252,7 @@ describe('ConveyorDiagram rendering integrity', () => {
       expect(x).toBeGreaterThanOrEqual(0)
       expect(y).toBeGreaterThanOrEqual(0)
       expect(x + width).toBeLessThanOrEqual(1600)
-      expect(y + height).toBeLessThanOrEqual(850)
+      expect(y + height).toBeLessThanOrEqual(1040)
     }
   })
 

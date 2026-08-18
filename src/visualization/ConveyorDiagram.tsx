@@ -1,16 +1,155 @@
 import type { FC, ReactNode } from 'react'
-import type { CartbuildLaneId, ConveyorSegmentConfig, SimulationStateWithProgress, Tray, ZonedConveyorId } from '../simulation/types'
+import type {
+  CartbuildLaneId,
+  ConveyorSegmentConfig,
+  InboundRobotSnapshot,
+  OutboundRobotSnapshot,
+  SimulationStateWithProgress,
+  SourceId,
+  Tray,
+  TrayLoadState,
+  ZonedConveyorId,
+} from '../simulation/types'
 
 interface Props { segments: ConveyorSegmentConfig[]; trays: Tray[]; state: SimulationStateWithProgress }
 type Orientation = 'horizontal' | 'vertical'
 type Region = 'MDR' | 'MDR_UPSTREAM' | 'BELT' | 'MDR_DOWNSTREAM'
 interface LayoutRect { x: number; y: number; w: number; h: number; conveyorId: string; region: Region; orientation: Orientation; zoneIndex?: number; reverse?: boolean }
 
-const VIEWBOX = { width: 1600, height: 850 }
+const VIEWBOX = { width: 1600, height: 1040 }
 const ZONE_THICKNESS = 24
 const COLORS = {
   canvas: '#f8fafb', grid: '#e6ebef', conveyor: '#dce2e6', conveyorEdge: '#647581', belt: '#a8bcc8', beltEdge: '#435f70', text: '#22333e', muted: '#627480', connector: '#526a78',
   empty: '#2b78a0', full: '#e57b25', held: '#9b51a8', purge: '#f4c542', A2: '#b74747', B2: '#7254a5', C2: '#34815c',
+  robot: '#52616b', inboundRobot: '#7b8790', blockedRobot: '#bd2c2c', rack: '#d7dee3', rackEdge: '#526a78',
+}
+
+const ASRS_PATHS: Record<SourceId, { centerX: number; dropX: number; takeX: number }> = {
+  A: { centerX: 300, dropX: 280, takeX: 320 },
+  B: { centerX: 430, dropX: 410, takeX: 450 },
+  C: { centerX: 620, dropX: 600, takeX: 640 },
+}
+const ASRS_DROP_Y = 872
+const ASRS_RACK_Y = 1008
+const ASRS_QUEUE_START_Y = 900
+const ASRS_VISIBLE_QUEUE_SIZE = 4
+const ASRS_QUEUE_SLOT_SPACING = 24
+
+type VisualRobot = {
+  robotId: number
+  missionId: number
+  exchanger: SourceId
+  kind: 'OUTBOUND' | 'INBOUND_ONLY'
+  state: string
+  missionType: 'CARTBUILD' | 'EMPTY' | 'INBOUND_ONLY'
+  travelProgress: number
+  returnProgress: number
+  queuePosition: number | null
+  blocked: boolean
+  cycleType: 'OUTBOUND_ONLY' | 'INBOUND_ONLY' | 'DUAL_CYCLE' | 'CANCELLED_INBOUND_ONLY' | null
+  outboundTrayId: number | null
+  inboundTrayId: number | null
+  payloadState: TrayLoadState | null
+  payloadHasCarton: boolean
+  carryingPayload: boolean
+}
+
+const clampProgress = (value: number) => Math.max(0, Math.min(1, value))
+
+const activeVisualRobots = (state: SimulationStateWithProgress): VisualRobot[] => {
+  const outbound = state.asrsRobotSystem.outboundRobots
+    .filter((robot) => robot.lifecycleState !== 'OUTBOUND_COMPLETE')
+    .map((robot: OutboundRobotSnapshot): VisualRobot => {
+      const returning = robot.lifecycleState === 'RETURNING_TO_RACK'
+      const carryingOutbound = robot.ownsPayload
+      const carryingInbound = returning && robot.inboundTrayId !== null
+      return {
+        robotId: robot.robotId,
+        missionId: robot.missionId,
+        exchanger: robot.assignedExchanger,
+        kind: 'OUTBOUND',
+        state: robot.lifecycleState,
+        missionType: robot.missionType,
+        travelProgress: robot.travelProgress,
+        returnProgress: robot.returnProgress,
+        queuePosition: robot.queuePosition,
+        blocked: robot.blockedReason !== null || robot.lifecycleState === 'BLOCKED_FROM_DROP',
+        cycleType: returning ? (robot.inboundTrayId === null ? 'OUTBOUND_ONLY' : 'DUAL_CYCLE') : null,
+        outboundTrayId: robot.payloadTrayId,
+        inboundTrayId: carryingInbound ? robot.inboundTrayId : null,
+        payloadState: carryingOutbound ? robot.payloadLoadState : carryingInbound ? robot.inboundTrayLoadState : null,
+        payloadHasCarton: (carryingOutbound && robot.cartbuildCartonAttached) || (carryingInbound && robot.inboundTrayLoadState === 'FULL'),
+        carryingPayload: carryingOutbound || carryingInbound,
+      }
+    })
+  const inbound = state.asrsRobotSystem.inboundOnlyRobots
+    .filter((robot) => robot.lifecycleState !== 'INBOUND_COMPLETE' && robot.lifecycleState !== 'CANCELLED')
+    .map((robot: InboundRobotSnapshot): VisualRobot => ({
+      robotId: robot.robotId,
+      missionId: robot.missionId,
+      exchanger: robot.assignedExchanger,
+      kind: 'INBOUND_ONLY',
+      state: robot.lifecycleState,
+      missionType: 'INBOUND_ONLY',
+      travelProgress: robot.travelProgress,
+      returnProgress: robot.returnProgress,
+      queuePosition: robot.queuePosition,
+      blocked: false,
+      cycleType: robot.cancelledAfterAdmission ? 'CANCELLED_INBOUND_ONLY' : 'INBOUND_ONLY',
+      outboundTrayId: null,
+      inboundTrayId: robot.ownsInboundTray ? robot.inboundTrayId : null,
+      payloadState: robot.ownsInboundTray ? robot.inboundTrayLoadState : null,
+      payloadHasCarton: robot.ownsInboundTray && robot.inboundTrayLoadState === 'FULL',
+      carryingPayload: robot.ownsInboundTray,
+    }))
+  return [...outbound, ...inbound]
+}
+
+const isOperationalRobot = (robot: VisualRobot, state: SimulationStateWithProgress) => {
+  const exchanger = state.asrsRobotSystem.exchangers[robot.exchanger]
+  return robot.state === 'RETURNING_TO_RACK'
+    || robot.state === 'SHIFTING_TO_TAKE'
+    || exchanger.shiftingOrTakeRobotId === robot.robotId
+    || robot.state === 'AT_DROP'
+    || robot.state === 'BLOCKED_FROM_DROP'
+    || exchanger.dropRobotId === robot.robotId
+}
+
+const isIndividuallyRendered = (robot: VisualRobot, state: SimulationStateWithProgress) => isOperationalRobot(robot, state)
+  || (robot.queuePosition !== null && robot.queuePosition >= 1 && robot.queuePosition <= ASRS_VISIBLE_QUEUE_SIZE)
+
+const robotPosition = (robot: VisualRobot, state: SimulationStateWithProgress) => {
+  const path = ASRS_PATHS[robot.exchanger]
+  const exchanger = state.asrsRobotSystem.exchangers[robot.exchanger]
+  if (robot.state === 'RETURNING_TO_RACK') {
+    const progress = clampProgress(robot.returnProgress)
+    return { x: path.takeX, y: ASRS_DROP_Y + (ASRS_RACK_Y - ASRS_DROP_Y) * progress, position: progress === 0 ? 'TAKE' : 'RETURN', progress }
+  }
+  if (robot.state === 'SHIFTING_TO_TAKE' || exchanger.shiftingOrTakeRobotId === robot.robotId) {
+    const progress = clampProgress(state.timeSec - (exchanger.lastSuccessfulDropTime ?? state.timeSec))
+    return { x: path.dropX + (path.takeX - path.dropX) * progress, y: ASRS_DROP_Y, position: progress >= 1 ? 'TAKE' : 'SHIFT', progress }
+  }
+  if (robot.state === 'AT_DROP' || robot.state === 'BLOCKED_FROM_DROP' || exchanger.dropRobotId === robot.robotId) {
+    return { x: path.dropX, y: ASRS_DROP_Y, position: 'DROP', progress: 1 }
+  }
+  if (robot.queuePosition !== null || robot.state === 'QUEUED_FOR_DROP' || robot.state === 'HEAD_OF_DROP_QUEUE') {
+    const queuePosition = Math.max(1, robot.queuePosition ?? 1)
+    const restingY = ASRS_QUEUE_START_Y + (queuePosition - 1) * ASRS_QUEUE_SLOT_SPACING
+    const advancementProgress = exchanger.queueAdvancementState === 'ADVANCING' ? clampProgress(exchanger.queueAdvanceProgress) : 1
+    return {
+      x: path.dropX,
+      y: restingY + ASRS_QUEUE_SLOT_SPACING * (1 - advancementProgress),
+      position: 'QUEUE',
+      progress: advancementProgress,
+    }
+  }
+  const progress = clampProgress(robot.travelProgress)
+  return {
+    x: path.dropX,
+    y: ASRS_RACK_Y + (ASRS_DROP_Y - ASRS_RACK_Y) * progress,
+    position: 'OUTBOUND_TRAVEL',
+    progress,
+  }
 }
 
 const ZONED_SPECS: Array<{ id: ZonedConveyorId; count: number; x: number; y: number; length: number; orientation: Orientation; reverse?: boolean; label: string }> = [
@@ -108,10 +247,18 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
     ...ZONED_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => ({ id: spec.id, text: spec.label, x: spec.orientation === 'horizontal' ? spec.x + spec.length / 2 : spec.x + 22, y: spec.orientation === 'horizontal' ? spec.y - 24 : spec.y + spec.length / 2, anchor: spec.orientation === 'horizontal' ? 'middle' : 'start', rotate: spec.orientation === 'vertical' })),
     ...PILES.map((pile) => ({ id: pile.id, text: pile.label, x: pile.x - 25, y: 350, anchor: 'middle', rotate: true })),
   ]
+  const visualRobots = activeVisualRobots(state)
+  const individualRobots = visualRobots.filter((robot) => isIndividuallyRendered(robot, state))
+  const aggregateRobots = Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => [
+    source,
+    visualRobots
+      .filter((robot) => robot.exchanger === source && !isIndividuallyRendered(robot, state))
+      .sort((left, right) => left.robotId - right.robotId),
+  ])) as Record<SourceId, VisualRobot[]>
 
   return (
-    <svg className="conveyor-diagram" data-return-enabled={state.returnSystem.enabled} viewBox={`0 0 ${VIEWBOX.width} ${VIEWBOX.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Complete outbound and return conveyor network">
-      <title>Milestone 8 conveyor network with outbound accumulation and downstream return loop</title>
+    <svg className="conveyor-diagram" data-return-enabled={state.returnSystem.enabled} viewBox={`0 0 ${VIEWBOX.width} ${VIEWBOX.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Complete conveyor and ASRS robot network">
+      <title>Full conveyor network with ASRS outbound, dual-cycle, and inbound-only robots</title>
       <defs>
         <pattern id="schematic-grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M 20 0 L 0 0 0 20" fill="none" stroke={COLORS.grid} strokeWidth="1" /></pattern>
         <marker id="flow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 z" fill={COLORS.connector} /></marker>
@@ -146,6 +293,54 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
           <Connector id="CARTBUILD-C-to-OPERATOR-C" from="CARTBUILD_C" to="OPERATOR_C" d="M655 235 L655 214" />
         </>}
       </g>
+
+      {state.cartbuildSystem.enabled && <g aria-label="ASRS rack and exchanger robot paths" data-asrs-system="true">
+        <rect data-asrs-rack-id="ASRS_RACK" x={210} y={984} width={510} height={48} rx={6} fill={COLORS.rack} stroke={COLORS.rackEdge} strokeWidth={2} />
+        <text x={708} y={1008} textAnchor="middle" transform="rotate(-90 708 1008)" fontSize={7} fontWeight={700} fill={COLORS.text}>SHARED ASRS RACK</text>
+        {(Object.keys(ASRS_PATHS) as SourceId[]).map((source) => {
+          const path = ASRS_PATHS[source]
+          return <g key={source} data-asrs-path-id={`ASRS_PATH_${source}`} data-exchanger-id={source}>
+            <path data-asrs-connector-id={`${source}_EXCHANGER_TO_DROP`} d={`M${path.centerX} 844 L${path.centerX} 855 L${path.dropX} 855 L${path.dropX} ${ASRS_DROP_Y}`} fill="none" stroke={COLORS.connector} strokeWidth={2} />
+            <path data-asrs-connector-id={`${source}_EXCHANGER_TO_TAKE`} d={`M${path.centerX} 844 L${path.centerX} 855 L${path.takeX} 855 L${path.takeX} ${ASRS_DROP_Y}`} fill="none" stroke={COLORS.connector} strokeWidth={2} />
+            <path data-asrs-direction="OUTBOUND" d={`M${path.dropX} 984 L${path.dropX} ${ASRS_DROP_Y}`} fill="none" stroke={COLORS.connector} strokeWidth={2} markerEnd="url(#flow-arrow)" />
+            <path data-asrs-direction="RETURN" d={`M${path.takeX} ${ASRS_DROP_Y} L${path.takeX} 984`} fill="none" stroke={COLORS.connector} strokeWidth={2} markerEnd="url(#flow-arrow)" />
+            <line x1={path.dropX} y1={ASRS_DROP_Y} x2={path.takeX} y2={ASRS_DROP_Y} stroke={COLORS.connector} strokeWidth={2} markerEnd="url(#flow-arrow)" />
+            <circle data-asrs-position-id={`${source}_DROP`} cx={path.dropX} cy={ASRS_DROP_Y} r={7} fill="#fff" stroke={COLORS.connector} strokeWidth={2} />
+            <circle data-asrs-position-id={`${source}_TAKE`} cx={path.takeX} cy={ASRS_DROP_Y} r={7} fill="#fff" stroke={COLORS.connector} strokeWidth={2} />
+            <text data-asrs-label-id={`${source}_DROP_LABEL`} x={path.dropX - 8} y={ASRS_DROP_Y - 13} textAnchor="end" fontSize={8} fontWeight={700} fill={COLORS.text}>{`${source} DROP`}</text>
+            <text data-asrs-label-id={`${source}_TAKE_LABEL`} x={path.takeX + 8} y={ASRS_DROP_Y - 13} textAnchor="start" fontSize={8} fontWeight={700} fill={COLORS.text}>{`${source} TAKE`}</text>
+          </g>
+        })}
+        {(Object.keys(ASRS_PATHS) as SourceId[]).map((source) => {
+          const robots = aggregateRobots[source]
+          const cartbuildCount = robots.filter((robot) => robot.missionType === 'CARTBUILD').length
+          const emptyCount = robots.filter((robot) => robot.missionType === 'EMPTY').length
+          const inboundOnlyCount = robots.filter((robot) => robot.missionType === 'INBOUND_ONLY').length
+          const maturedOverflowCount = robots.filter((robot) => robot.queuePosition !== null && robot.queuePosition > ASRS_VISIBLE_QUEUE_SIZE).length
+          const containedRobotIds = robots.map((robot) => robot.robotId)
+          const tooltip = robots.length === 0
+            ? 'No robots in transit'
+            : robots.map((robot) => `R${robot.robotId}/M${robot.missionId} ${robot.state}${robot.queuePosition === null ? '' : ` Q${robot.queuePosition}`} ${robot.payloadState ?? 'NO PAYLOAD'}`).join(' · ')
+          const x = ASRS_PATHS[source].centerX - 55
+          return <g
+            key={`ASRS_TRANSIT_${source}`}
+            data-asrs-transit-exchanger={source}
+            data-aggregate-robot-count={robots.length}
+            data-cartbuild-count={cartbuildCount}
+            data-empty-count={emptyCount}
+            data-inbound-only-count={inboundOnlyCount}
+            data-matured-overflow-count={maturedOverflowCount}
+            data-contained-robot-ids={containedRobotIds.join(',')}
+          >
+            <title>{`ASRS Transit ${source} · ${tooltip}`}</title>
+            <rect x={x} y={989} width={110} height={38} rx={4} fill="rgba(255,255,255,.9)" stroke={COLORS.rackEdge} strokeWidth={1.5} />
+            <text x={x + 55} y={997} textAnchor="middle" fontSize={6.5} fontWeight={700} fill={COLORS.text}>{`ASRS TRANSIT ${source}`}</text>
+            <text x={x + 55} y={1006} textAnchor="middle" fontSize={6.5} fill={COLORS.text}>{`Total: ${robots.length}`}</text>
+            <text x={x + 55} y={1015} textAnchor="middle" fontSize={6.5} fill={COLORS.text}>{`CB ${cartbuildCount} | E ${emptyCount} | IN ${inboundOnlyCount}`}</text>
+            <text x={x + 55} y={1024} textAnchor="middle" fontSize={6.5} fill={COLORS.text}>{`Queue overflow: ${maturedOverflowCount}`}</text>
+          </g>
+        })}
+      </g>}
 
       <g aria-label="Conveyor zones" data-conveyor-bounds="S" data-bounds-x="480" data-bounds-y="504" data-bounds-width="90" data-bounds-height="48">
         {Array.from(layouts.entries()).map(([key, layout]) => {
@@ -209,6 +404,42 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
           return <rect key={`${lane.id}-${carton.internalKey}`} data-carton-marker="true" data-cartbuild-lane={lane.id} data-zone-id={`${lane.id}:MDR:${carton.zoneIndex}`} data-carton-state="ON_CONVEYOR" x={layout.x + 3} y={layout.y + layout.h / 2 - 3} width={10} height={6} rx={1} fill="#d39a45" stroke="#6e4819" strokeWidth={1} />
         }))}
       </g>
+
+      {state.cartbuildSystem.enabled && <g aria-label="Active ASRS robots">
+        {individualRobots.map((robot) => {
+          const position = robotPosition(robot, state)
+          const label = `R${String(robot.robotId).slice(-2)}`
+          const bodyFill = robot.kind === 'INBOUND_ONLY' ? COLORS.inboundRobot : COLORS.robot
+          return <g
+            key={robot.robotId}
+            data-robot-id={robot.robotId}
+            data-mission-id={robot.missionId}
+            data-exchanger-id={robot.exchanger}
+            data-robot-kind={robot.kind}
+            data-robot-state={robot.state}
+            data-cycle-type={robot.cycleType ?? undefined}
+            data-queue-position={robot.queuePosition ?? undefined}
+            data-blocked={robot.blocked}
+            data-outbound-tray-id={robot.outboundTrayId ?? undefined}
+            data-inbound-tray-id={robot.inboundTrayId ?? undefined}
+            data-payload-state={robot.payloadState ?? 'NONE'}
+            data-path-progress={position.progress.toFixed(3)}
+            data-asrs-position={position.position}
+            data-robot-x={position.x.toFixed(2)}
+            data-robot-y={position.y.toFixed(2)}
+            transform={`translate(${position.x - 9} ${position.y - 17})`}
+          >
+            <title>{`Robot ${robot.robotId} · Mission ${robot.missionId} · Exchanger ${robot.exchanger} · ${robot.state}${robot.cycleType === null ? '' : ` · ${robot.cycleType}`}${robot.outboundTrayId === null ? '' : ` · outbound tray ${robot.outboundTrayId}`}${robot.inboundTrayId === null ? '' : ` · inbound tray ${robot.inboundTrayId}`}`}</title>
+            <rect data-robot-body="true" x={0} y={11} width={18} height={12} rx={3} fill={bodyFill} stroke={robot.blocked ? COLORS.blockedRobot : '#26343d'} strokeWidth={robot.blocked ? 3 : 1.5} strokeDasharray={robot.blocked ? '3 2' : undefined} />
+            <text x={9} y={20} textAnchor="middle" fontSize={6.5} fontWeight={700} fill="white">{label}</text>
+            {robot.queuePosition !== null && robot.queuePosition <= ASRS_VISIBLE_QUEUE_SIZE && <text data-queue-slot-label={`Q${robot.queuePosition}`} x={21} y={20} fontSize={6.5} fontWeight={700} fill={COLORS.text}>{`Q${robot.queuePosition}`}</text>}
+            {robot.carryingPayload && <>
+              <rect data-robot-tray="true" x={2} y={5} width={14} height={6} rx={1} fill={robot.payloadState === 'FULL' ? COLORS.full : COLORS.empty} stroke="#26343d" strokeWidth={1} />
+              {robot.payloadHasCarton && <rect data-robot-carton="true" x={5} y={0} width={8} height={5} rx={1} fill="#d39a45" stroke="#6e4819" strokeWidth={1} />}
+            </>}
+          </g>
+        })}
+      </g>}
 
       <g data-legend="tray-and-conveyor-states" transform="translate(930 760)">
         <rect x={0} y={0} width={610} height={70} rx={5} fill="rgba(255,255,255,.92)" stroke="#aab7c0" />
