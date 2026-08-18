@@ -190,7 +190,7 @@ describe('Milestone 10C exchanger DROP/TAKE pipeline', () => {
     expect(tray).toMatchObject({ loadState: 'FULL', cartbuildCartonAttached: true, pilePlacement: { zoneIndex: 2 } })
   })
 
-  test('DROP-to-TAKE shifting lasts exactly one simulated second and records history', () => {
+  test('DROP-to-TAKE shifting lasts exactly one simulated second and history follows rack return', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const { runtime, missions } = ready(engine, 'A')
     clearEntrance(runtime, 'A')
@@ -201,8 +201,12 @@ describe('Milestone 10C exchanger DROP/TAKE pipeline', () => {
     expect(pipeline(engine, 'A').shiftingOrTakeRobotId).toBe(missions[0].robotId)
     runtime.timeSec = 201
     runtime.attemptExchangerReleases()
-    expect(pipeline(engine, 'A')).toMatchObject({ shiftingOrTakeRobotId: null, successfulOutboundOnlyCycleCount: 1 })
-    expect(engine.getState().asrsRobotSystem.completedOutboundCycles[0]).toMatchObject({ robotId: missions[0].robotId, takeArrivalTimeSec: 201, cycleType: 'OUTBOUND_ONLY' })
+    expect(pipeline(engine, 'A')).toMatchObject({ shiftingOrTakeRobotId: null, successfulOutboundOnlyCycleCount: 0 })
+    expect(engine.getState().asrsRobotSystem.returningRobots[0]).toMatchObject({ robotId: missions[0].robotId, returnStartedAtSec: 201, rackArrivalTimeSec: 211 })
+    runtime.timeSec = 211
+    runtime.attemptExchangerReleases()
+    expect(pipeline(engine, 'A').successfulOutboundOnlyCycleCount).toBe(1)
+    expect(engine.getState().asrsRobotSystem.completedOutboundCycles[0]).toMatchObject({ robotId: missions[0].robotId, takeArrivalTimeSec: 201, rackArrivalTimeSec: 211, cycleType: 'OUTBOUND_ONLY' })
   })
 
   test('a shifting robot completes while another exchanger DROP is blocked', () => {
@@ -217,7 +221,7 @@ describe('Milestone 10C exchanger DROP/TAKE pipeline', () => {
     clearEntrance(runtime, 'A')
     runtime.attemptExchangerReleases()
     expect(pipeline(engine, 'B').dropBlocked).toBe(true)
-    runtime.timeSec = 201
+    runtime.timeSec = 211
     runtime.attemptExchangerReleases()
     expect(pipeline(engine, 'A').successfulOutboundOnlyCycleCount).toBe(1)
     expect(pipeline(engine, 'B').dropBlocked).toBe(true)

@@ -167,7 +167,9 @@ export interface Mission {
   state: MissionState
 }
 
-export type OutboundRobotLifecycleState = 'TRAVELING_OUTBOUND' | 'QUEUED_FOR_DROP' | 'HEAD_OF_DROP_QUEUE' | 'AT_DROP' | 'BLOCKED_FROM_DROP' | 'SHIFTING_TO_TAKE' | 'OUTBOUND_COMPLETE'
+export type OutboundRobotLifecycleState = 'TRAVELING_OUTBOUND' | 'QUEUED_FOR_DROP' | 'HEAD_OF_DROP_QUEUE' | 'AT_DROP' | 'BLOCKED_FROM_DROP' | 'SHIFTING_TO_TAKE' | 'RETURNING_TO_RACK' | 'OUTBOUND_COMPLETE'
+export type InboundRobotLifecycleState = 'TRAVELING_TO_DROP' | 'QUEUED_FOR_DROP' | 'HEAD_OF_DROP_QUEUE' | 'AT_DROP' | 'SHIFTING_TO_TAKE' | 'RETURNING_TO_RACK' | 'INBOUND_COMPLETE' | 'CANCELLED'
+export type RobotCycleType = 'OUTBOUND_ONLY' | 'INBOUND_ONLY' | 'DUAL_CYCLE' | 'CANCELLED_INBOUND_ONLY'
 export type OutboundRobotBlockedReason = 'PILE_ENTRANCE_OCCUPIED' | 'CARTBUILD_LANE_ENTRANCE_OCCUPIED'
 
 export interface OutboundRobotSnapshot {
@@ -186,6 +188,64 @@ export interface OutboundRobotSnapshot {
   payloadLoadState: TrayLoadState
   cartbuildCartonAttached: boolean
   ownsPayload: boolean
+  inboundTrayId: number | null
+  inboundTrayLoadState: TrayLoadState | null
+  takePickupTimeSec: number | null
+  rackArrivalTimeSec: number | null
+  returnProgress: number
+}
+
+export interface InboundTrayReservationSnapshot {
+  trayId: number
+  loadState: TrayLoadState
+  exchanger: SourceId
+  robotId: number
+  missionId: number
+  reservedAtSec: number
+}
+
+export interface InboundRobotSnapshot {
+  robotId: number
+  missionId: number
+  assignedExchanger: SourceId
+  lifecycleState: InboundRobotLifecycleState
+  reservedTrayId: number
+  assignedAtSec: number
+  maturityTimeSec: number
+  travelProgress: number
+  queuePosition: number | null
+  cancellationTimeSec: number | null
+  cancellationReason: 'CLAIMED_BY_OUTBOUND_ROBOT' | null
+  cancelledAfterAdmission: boolean
+  ownsInboundTray: boolean
+  inboundTrayId: number | null
+  inboundTrayLoadState: TrayLoadState | null
+  takePickupTimeSec: number | null
+  rackArrivalTimeSec: number | null
+  returnProgress: number
+}
+
+export interface ReturningRobotSnapshot {
+  robotId: number
+  missionId: number
+  robotKind: 'OUTBOUND' | 'INBOUND_ONLY'
+  exchanger: SourceId
+  inboundTrayId: number | null
+  inboundTrayLoadState: TrayLoadState | null
+  returnStartedAtSec: number
+  rackArrivalTimeSec: number
+  returnProgress: number
+}
+
+export interface CancelledInboundRobotRecord {
+  robotId: number
+  missionId: number
+  exchanger: SourceId
+  reservedTrayId: number
+  cancellationTimeSec: number
+  cancellationReason: 'CLAIMED_BY_OUTBOUND_ROBOT'
+  cancelledAfterAdmission: boolean
+  rackArrivalTimeSec: number | null
 }
 
 export interface AsrsRobotSystemState {
@@ -194,12 +254,19 @@ export interface AsrsRobotSystemState {
   robotCarriedTrayCount: number
   exchangers: Record<SourceId, ExchangerPipelineSnapshot>
   completedOutboundCycles: CompletedOutboundCycle[]
+  completedCycles: CompletedOutboundCycle[]
+  inboundReservations: InboundTrayReservationSnapshot[]
+  inboundOnlyRobots: InboundRobotSnapshot[]
+  returningRobots: ReturningRobotSnapshot[]
+  cancelledInboundOnlyRobots: CancelledInboundRobotRecord[]
+  completedCountByClassification: Record<RobotCycleType, number>
+  dualCyclePercentage: number
 }
 
 export interface ExchangerQueueEntry {
   robotId: number
   missionId: number
-  missionType: MissionType
+  missionType: MissionType | 'INBOUND_ONLY'
 }
 
 export interface ExchangerPipelineSnapshot {
@@ -217,23 +284,34 @@ export interface ExchangerPipelineSnapshot {
   queueAdvancementState: 'IDLE' | 'ADVANCING' | 'COMPLETE'
   queueAdvanceProgress: number
   successfulOutboundOnlyCycleCount: number
+  currentQueueDepth: number
+  completedCountByClassification: Record<RobotCycleType, number>
+  dualCyclePercentage: number
 }
 
 export interface CompletedOutboundCycle {
   robotId: number
   missionId: number
-  missionType: MissionType
+  missionType: MissionType | 'INBOUND_ONLY'
   exchanger: SourceId
-  payloadTrayId: number
-  payloadLoadState: TrayLoadState
+  payloadTrayId: number | null
+  payloadLoadState: TrayLoadState | null
   assignmentTimeSec: number
   maturityTimeSec: number
   queueEntryTimeSec: number
   dropEntryTimeSec: number
-  successfulDropTimeSec: number
+  successfulDropTimeSec: number | null
   takeArrivalTimeSec: number
   totalDropBlockedDurationSec: number
-  cycleType: 'OUTBOUND_ONLY'
+  cycleType: RobotCycleType
+  inboundTrayId: number | null
+  inboundTrayLoadState: TrayLoadState | null
+  takePickupTimeSec: number | null
+  returnStartedAtSec: number
+  rackArrivalTimeSec: number
+  cancellationTimeSec: number | null
+  cancellationReason: 'CLAIMED_BY_OUTBOUND_ROBOT' | null
+  cancelledAfterAdmission: boolean
 }
 
 export type SrsPileId = 'A1' | 'B1' | 'C1' | 'T' | 'D' | 'A2' | 'B2' | 'C2'
@@ -322,6 +400,8 @@ export interface ReturnedTrayRecord {
   loadState: TrayLoadState
   destination: ReturnDestination
   acceptedAtSec: number
+  payloadOrigin?: TrayPayloadOrigin
+  cartbuildCartonAttached?: boolean
 }
 
 export interface ReturnSystemState {

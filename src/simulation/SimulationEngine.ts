@@ -1026,8 +1026,10 @@ export class SimulationEngine {
       mergeState: { ...this.mergeState },
       missions: this.missions.map(m => ({ ...m })),
       asrsRobotSystem: {
-        outboundRobots: [], maturedQueues: { A: [], B: [], C: [] }, robotCarriedTrayCount: 0, completedOutboundCycles: [],
-        exchangers: Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => [source, { source, dropRobotId: null, shiftingOrTakeRobotId: null, dropBlocked: false, dropBlockedReason: null, dropBlockedDurationSec: 0, lastSuccessfulDropTime: null, nextEligibleCycleAdmissionTime: 0, queue: [], queueLength: 0, maximumObservedQueueLength: 0, queueAdvancementState: 'IDLE', queueAdvanceProgress: 0, successfulOutboundOnlyCycleCount: 0 }])) as unknown as SimulationStateWithProgress['asrsRobotSystem']['exchangers'],
+        outboundRobots: [], maturedQueues: { A: [], B: [], C: [] }, robotCarriedTrayCount: 0, completedOutboundCycles: [], completedCycles: [],
+        inboundReservations: [], inboundOnlyRobots: [], returningRobots: [], cancelledInboundOnlyRobots: [],
+        completedCountByClassification: { OUTBOUND_ONLY: 0, INBOUND_ONLY: 0, DUAL_CYCLE: 0, CANCELLED_INBOUND_ONLY: 0 }, dualCyclePercentage: 0,
+        exchangers: Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => [source, { source, dropRobotId: null, shiftingOrTakeRobotId: null, dropBlocked: false, dropBlockedReason: null, dropBlockedDurationSec: 0, lastSuccessfulDropTime: null, nextEligibleCycleAdmissionTime: 0, queue: [], queueLength: 0, maximumObservedQueueLength: 0, queueAdvancementState: 'IDLE', queueAdvanceProgress: 0, successfulOutboundOnlyCycleCount: 0, currentQueueDepth: 0, completedCountByClassification: { OUTBOUND_ONLY: 0, INBOUND_ONLY: 0, DUAL_CYCLE: 0, CANCELLED_INBOUND_ONLY: 0 }, dualCyclePercentage: 0 }])) as unknown as SimulationStateWithProgress['asrsRobotSystem']['exchangers'],
       },
       korber: {
         lastConsumptionTime: this.korberLastConsumption === -Number.MAX_VALUE ? null : this.korberLastConsumption,
