@@ -209,7 +209,7 @@ describe('Milestone 10B outbound ASRS robots', () => {
     expect(runtime.asrsLastRelease.A).toBe(100)
   })
 
-  test('blocked CARTBUILD robot still permits eligible EMPTY fallback', () => {
+  test('DROP ownership prevents EMPTY bypass around a blocked CARTBUILD robot', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
     const [cartbuild, empty] = runtime.missions.filter(({ assignedExchanger }) => assignedExchanger === 'A').slice(0, 2)
@@ -219,13 +219,12 @@ describe('Milestone 10B outbound ASRS robots', () => {
     if (empty.robotPayload) { empty.robotPayload.loadState = 'EMPTY'; empty.robotPayload.payloadOrigin = undefined; empty.robotPayload.cartbuildCartonAttached = undefined }
     for (const mission of [cartbuild, empty]) { mission.state = 'READY_AT_EXCHANGER'; mission.robotState = 'QUEUED_FOR_DROP' }
     runtime.missions = [cartbuild, empty]
-    clearEntrance(runtime, 'A')
     runtime.cartons = [{ internalKey: 1, laneId: 'CARTBUILD_A', zoneIndex: 0 }]
     runtime.asrsLastRelease.A = -1e9
     runtime.attemptExchangerReleases()
     expect(cartbuild.state).toBe('READY_AT_EXCHANGER')
-    expect(empty.state).toBe('RELEASED')
-    expect(runtime.trays.find(({ id }) => id === empty.payloadTrayId)?.loadState).toBe('EMPTY')
+    expect(empty.state).toBe('READY_AT_EXCHANGER')
+    expect(runtime.trays.find(({ id }) => id === empty.payloadTrayId)).toBeUndefined()
   })
 
   test('repeated Reset and Start Scenario reproduce robot and payload tray IDs', () => {

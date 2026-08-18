@@ -167,7 +167,7 @@ export interface Mission {
   state: MissionState
 }
 
-export type OutboundRobotLifecycleState = 'TRAVELING_OUTBOUND' | 'QUEUED_FOR_DROP' | 'HEAD_OF_DROP_QUEUE' | 'BLOCKED_FROM_DROP' | 'OUTBOUND_COMPLETE'
+export type OutboundRobotLifecycleState = 'TRAVELING_OUTBOUND' | 'QUEUED_FOR_DROP' | 'HEAD_OF_DROP_QUEUE' | 'AT_DROP' | 'BLOCKED_FROM_DROP' | 'SHIFTING_TO_TAKE' | 'OUTBOUND_COMPLETE'
 export type OutboundRobotBlockedReason = 'PILE_ENTRANCE_OCCUPIED' | 'CARTBUILD_LANE_ENTRANCE_OCCUPIED'
 
 export interface OutboundRobotSnapshot {
@@ -192,6 +192,48 @@ export interface AsrsRobotSystemState {
   outboundRobots: OutboundRobotSnapshot[]
   maturedQueues: Record<SourceId, number[]>
   robotCarriedTrayCount: number
+  exchangers: Record<SourceId, ExchangerPipelineSnapshot>
+  completedOutboundCycles: CompletedOutboundCycle[]
+}
+
+export interface ExchangerQueueEntry {
+  robotId: number
+  missionId: number
+  missionType: MissionType
+}
+
+export interface ExchangerPipelineSnapshot {
+  source: SourceId
+  dropRobotId: number | null
+  shiftingOrTakeRobotId: number | null
+  dropBlocked: boolean
+  dropBlockedReason: OutboundRobotBlockedReason | null
+  dropBlockedDurationSec: number
+  lastSuccessfulDropTime: number | null
+  nextEligibleCycleAdmissionTime: number
+  queue: ExchangerQueueEntry[]
+  queueLength: number
+  maximumObservedQueueLength: number
+  queueAdvancementState: 'IDLE' | 'ADVANCING' | 'COMPLETE'
+  queueAdvanceProgress: number
+  successfulOutboundOnlyCycleCount: number
+}
+
+export interface CompletedOutboundCycle {
+  robotId: number
+  missionId: number
+  missionType: MissionType
+  exchanger: SourceId
+  payloadTrayId: number
+  payloadLoadState: TrayLoadState
+  assignmentTimeSec: number
+  maturityTimeSec: number
+  queueEntryTimeSec: number
+  dropEntryTimeSec: number
+  successfulDropTimeSec: number
+  takeArrivalTimeSec: number
+  totalDropBlockedDurationSec: number
+  cycleType: 'OUTBOUND_ONLY'
 }
 
 export type SrsPileId = 'A1' | 'B1' | 'C1' | 'T' | 'D' | 'A2' | 'B2' | 'C2'
