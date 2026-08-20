@@ -36,6 +36,13 @@ export interface Tray {
     conveyorId: ZonedConveyorId
     zoneIndex: number
   }
+  // authoritative placement inside an A2/B2/C2 sorter-MDR/spiral/exchanger-MDR composite
+  inboundPlacement?: {
+    conveyorId: ReturnDestination
+    component: 'MDR_SORTER_SIDE' | 'SPIRAL' | 'MDR_EXCHANGER_SIDE'
+    zoneIndex?: number
+    spiralPosFt?: number
+  }
 }
 
 export interface OperatingSettings {

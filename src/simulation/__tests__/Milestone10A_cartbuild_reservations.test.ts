@@ -143,7 +143,7 @@ describe('Milestone 10A cartbuild capacity reservation', () => {
         ...Array.from({ length: 24 }, (_, index) => ({ ...attachedTray(index + 1, 'A', index), loadState: 'EMPTY' as const, payloadOrigin: undefined, cartbuildCartonAttached: undefined })),
         ...Array.from({ length: 6 }, (_, zoneIndex) => ({ id: 100 + zoneIndex, currentSegmentId: 'T', positionFt: 1, status: 'BLOCKED' as const, createdAtSec: 0, originSourceId: 'A' as const, loadState: 'EMPTY' as const, zonePlacement: { conveyorId: 'T' as const, zoneIndex } })),
         ...Array.from({ length: 92 }, (_, zoneIndex) => ({ id: 200 + zoneIndex, currentSegmentId: 'D', positionFt: 1, status: 'BLOCKED' as const, createdAtSec: 0, originSourceId: 'A' as const, loadState: 'EMPTY' as const, zonePlacement: { conveyorId: 'D' as const, zoneIndex } })),
-        ...Array.from({ length: 36 }, (_, zoneIndex) => ({ id: 300 + zoneIndex, currentSegmentId: 'A2', positionFt: 1, status: 'BLOCKED' as const, createdAtSec: 0, originSourceId: 'A' as const, loadState: 'EMPTY' as const, zonePlacement: { conveyorId: 'A2' as const, zoneIndex } })),
+        ...Array.from({ length: 36 }, (_, zoneIndex) => ({ id: 300 + zoneIndex, currentSegmentId: 'A2', positionFt: 1, status: 'BLOCKED' as const, createdAtSec: 0, originSourceId: 'A' as const, loadState: 'EMPTY' as const, inboundPlacement: zoneIndex < 33 ? { conveyorId: 'A2' as const, component: 'MDR_SORTER_SIDE' as const, zoneIndex } : { conveyorId: 'A2' as const, component: 'SPIRAL' as const, spiralPosFt: 1 + (zoneIndex - 33) * 2 } })),
       ]
       runtime.operatingSettings = missionType === 'CARTBUILD'
         ? { korberEnabled: false, cartbuildAEnabled: true, cartbuildBEnabled: false, cartbuildCEnabled: false }

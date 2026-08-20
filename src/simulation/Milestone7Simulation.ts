@@ -1,4 +1,5 @@
 import HybridAccumulationPile from './HybridAccumulationPile'
+import InboundCompositeConveyor from './InboundCompositeConveyor'
 import type {
   ActiveSlugState,
   BeltDiagnostic,
@@ -29,10 +30,15 @@ const TRAY_LENGTH_FT = 2
 const SPEED_FT_PER_SEC = 2
 const ZONE_TRANSFER_SEC = ZONE_LENGTH_FT / SPEED_FT_PER_SEC
 const KORBER_INTERVAL_SEC = 3600 / 1050
-export const ZONE_COUNTS = { PRE_T: 6, T: 12, D: 92, PURGE: 12, E: 28, X: 4, S: 8, A2: 36, B2: 29, C2: 29 } as const
+export const ZONE_COUNTS = { PRE_T: 6, T: 12, D: 92, PURGE: 12, E: 28, X: 4, S: 8 } as const
 type ZonedId = keyof typeof ZONE_COUNTS
 const RETURN_IDS = ['PURGE', 'E', 'X', 'S', 'A2', 'B2', 'C2'] as const
 const RETURN_DESTINATIONS: ReturnDestination[] = ['A2', 'B2', 'C2']
+export const INBOUND_COMPOSITE_CONFIGS = {
+  A2: { totalLengthFt: 136, sorterSideMdrCount: 33, spiralLengthFt: 41, exchangerSideMdrCount: 5 },
+  B2: { totalLengthFt: 118.5, sorterSideMdrCount: 26, spiralLengthFt: 41, exchangerSideMdrCount: 5 },
+  C2: { totalLengthFt: 118.5, sorterSideMdrCount: 26, spiralLengthFt: 41, exchangerSideMdrCount: 5 },
+} as const
 const CARTBUILD_LANES: CartbuildLaneId[] = ['CARTBUILD_A', 'CARTBUILD_B', 'CARTBUILD_C']
 const CARTBUILD_ZONE_COUNT = 30
 const CARTBUILD_INTERVAL_SEC = 8
@@ -131,6 +137,7 @@ export default class Milestone7Simulation {
   private consumedCount = 0
   private segments: ConveyorSegmentConfig[]
   private piles = new Map<string, HybridAccumulationPile>()
+  private inboundComposites = new Map<ReturnDestination, InboundCompositeConveyor>()
   private missions: OutboundMission[] = []
   private inboundMissions: InboundMission[] = []
   private inboundReservations = new Map<number, number>()
@@ -185,7 +192,7 @@ export default class Milestone7Simulation {
       A1: { lengthFt: 103.5, maxOccupancy: 45 }, B1: { lengthFt: 86, maxOccupancy: 38 }, C1: { lengthFt: 86, maxOccupancy: 38 },
       PRE_T: { lengthFt: 15, maxOccupancy: 6 }, T: { lengthFt: 30, maxOccupancy: 12 }, D: { lengthFt: 230, maxOccupancy: 92 },
       PURGE: { lengthFt: 30, maxOccupancy: 12 }, E: { lengthFt: 70, maxOccupancy: 28 }, X: { lengthFt: 10, maxOccupancy: 4 }, S: { lengthFt: 20, maxOccupancy: 8 },
-      A2: { lengthFt: 90, maxOccupancy: 36 }, B2: { lengthFt: 72.5, maxOccupancy: 29 }, C2: { lengthFt: 72.5, maxOccupancy: 29 },
+      A2: { lengthFt: 136, maxOccupancy: 58 }, B2: { lengthFt: 118.5, maxOccupancy: 51 }, C2: { lengthFt: 118.5, maxOccupancy: 51 },
     }
     this.segments = segments.map((segment) => ({ ...segment, ...authoritativeGeometry[segment.id] }))
     this.returnEnabled = RETURN_IDS.every((id) => segments.some((segment) => segment.id === id))
@@ -194,6 +201,9 @@ export default class Milestone7Simulation {
     this.piles.set('A1', new HybridAccumulationPile({ pileId: 'A1', totalLengthFt: 103.5, preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 15, beltLengthFt: 41, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
     this.piles.set('B1', new HybridAccumulationPile({ pileId: 'B1', totalLengthFt: 86, preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 8, beltLengthFt: 41, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
     this.piles.set('C1', new HybridAccumulationPile({ pileId: 'C1', totalLengthFt: 86, preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 8, beltLengthFt: 41, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
+    for (const conveyorId of RETURN_DESTINATIONS) {
+      this.inboundComposites.set(conveyorId, new InboundCompositeConveyor({ conveyorId, ...INBOUND_COMPOSITE_CONFIGS[conveyorId], mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
+    }
     this.reset()
   }
 
@@ -283,6 +293,7 @@ export default class Milestone7Simulation {
       this.processKorber()
       this.planPendingDemandIfDue()
       this.processZonedConveyors(delta)
+      this.processInboundComposites(delta)
       this.processCartonConveyors(delta)
       this.processCartonOperators()
       this.processPiles(delta)
@@ -334,7 +345,7 @@ export default class Milestone7Simulation {
 
   private processZonedConveyors(delta: number) {
     const ids: ZonedId[] = this.returnEnabled
-      ? ['PRE_T', 'T', 'D', 'PURGE', 'E', 'X', 'S', 'A2', 'B2', 'C2']
+      ? ['PRE_T', 'T', 'D', 'PURGE', 'E', 'X', 'S']
       : ['PRE_T', 'T', 'D']
     for (const conveyorId of ids) {
       let residualElapsedSec = 0
@@ -353,6 +364,102 @@ export default class Milestone7Simulation {
         const source = zones[index]
         if (source && !zones[index + 1] && !source.pileRuntime) {
           source.pileRuntime = { transferring: true, transferRemainingSec: ZONE_TRANSFER_SEC - residualElapsedSec }
+        }
+      }
+    }
+  }
+
+  private inboundFinalTray(destination: ReturnDestination) {
+    const composite = this.inboundComposites.get(destination)!
+    return composite.mdrOccupancy(this.trays, 'MDR_EXCHANGER_SIDE')[composite.config.exchangerSideMdrCount - 1]
+  }
+
+  private inboundEntranceOpen(destination: ReturnDestination) {
+    return !this.inboundComposites.get(destination)!.mdrOccupancy(this.trays, 'MDR_SORTER_SIDE')[0]
+  }
+
+  private moveToInboundEntrance(tray: Tray, destination: ReturnDestination) {
+    tray.currentSegmentId = destination
+    tray.inboundPlacement = { conveyorId: destination, component: 'MDR_SORTER_SIDE', zoneIndex: 0 }
+    tray.zonePlacement = undefined
+    tray.pilePlacement = undefined
+    tray.pileRuntime = undefined
+    tray.status = 'BLOCKED'
+    this.inboundComposites.get(destination)!.updateAbsolutePosition(tray)
+  }
+
+  private processInboundComposites(delta: number) {
+    if (!this.returnEnabled) return
+    for (const destination of RETURN_DESTINATIONS) {
+      const inboundTrays = this.trays.filter((tray) => tray.inboundPlacement?.conveyorId === destination)
+      if (!inboundTrays.length) continue
+      const composite = this.inboundComposites.get(destination)!
+      const exchanger = composite.mdrOccupancy(inboundTrays, 'MDR_EXCHANGER_SIDE')
+      let residualElapsedSec = 0
+
+      for (const tray of inboundTrays) {
+        const placement = tray.inboundPlacement
+        if (placement?.conveyorId !== destination || placement.component === 'SPIRAL' || tray.pileRuntime?.transferRemainingSec === undefined) continue
+        const isSorterEntryTransfer = placement.component === 'MDR_SORTER_SIDE'
+          && placement.zoneIndex === composite.config.sorterSideMdrCount - 1
+        if (isSorterEntryTransfer && exchanger[0]) continue
+        tray.pileRuntime.transferRemainingSec -= delta
+        if (tray.pileRuntime.transferRemainingSec <= EPS) {
+          residualElapsedSec = Math.max(residualElapsedSec, -tray.pileRuntime.transferRemainingSec)
+          if (isSorterEntryTransfer) {
+            tray.inboundPlacement = { conveyorId: destination, component: 'SPIRAL', spiralPosFt: TRAY_LENGTH_FT / 2 }
+            tray.status = 'MOVING'
+          } else {
+            placement.zoneIndex = (placement.zoneIndex ?? 0) + 1
+          }
+          tray.pileRuntime = undefined
+          composite.updateAbsolutePosition(tray)
+        }
+      }
+
+      const refreshedExchanger = composite.mdrOccupancy(inboundTrays, 'MDR_EXCHANGER_SIDE')
+      for (let index = refreshedExchanger.length - 2; index >= 0; index--) {
+        const tray = refreshedExchanger[index]
+        if (tray && !refreshedExchanger[index + 1] && !tray.pileRuntime) {
+          tray.pileRuntime = { transferring: true, transferRemainingSec: ZONE_TRANSFER_SEC - residualElapsedSec }
+        }
+      }
+
+      const spiral = composite.spiralTrays(inboundTrays)
+      const beltExitAvailable = !refreshedExchanger[0]
+      if (beltExitAvailable) {
+        const leading = spiral.at(-1)
+        if (leading && (leading.inboundPlacement!.spiralPosFt ?? 0) >= composite.config.spiralLengthFt - TRAY_LENGTH_FT / 2 - EPS) {
+          leading.inboundPlacement = { conveyorId: destination, component: 'MDR_EXCHANGER_SIDE', zoneIndex: 0 }
+          leading.pileRuntime = undefined
+          composite.updateAbsolutePosition(leading)
+        }
+
+        const remainingSpiral = composite.spiralTrays(inboundTrays)
+        const maxCenter = composite.config.spiralLengthFt - TRAY_LENGTH_FT / 2
+        const maxDelta = remainingSpiral.length ? maxCenter - (remainingSpiral.at(-1)!.inboundPlacement!.spiralPosFt ?? 0) : Infinity
+        const sharedDelta = Math.max(0, Math.min(SPEED_FT_PER_SEC * delta, maxDelta))
+        for (const tray of remainingSpiral) {
+          tray.inboundPlacement!.spiralPosFt = (tray.inboundPlacement!.spiralPosFt ?? TRAY_LENGTH_FT / 2) + sharedDelta
+          tray.status = 'MOVING'
+          composite.updateAbsolutePosition(tray)
+        }
+
+        const sorterAfterMovement = composite.mdrOccupancy(inboundTrays, 'MDR_SORTER_SIDE')
+        const sorterFinal = sorterAfterMovement.at(-1)
+        const nearestCenter = remainingSpiral[0]?.inboundPlacement?.spiralPosFt ?? Infinity
+        if (sorterFinal && !sorterFinal.pileRuntime && nearestCenter - TRAY_LENGTH_FT / 2 >= TRAY_LENGTH_FT - EPS) {
+          sorterFinal.pileRuntime = { transferring: true, transferRemainingSec: ZONE_TRANSFER_SEC - residualElapsedSec }
+        }
+      } else {
+        for (const tray of spiral) tray.status = 'BLOCKED'
+      }
+
+      const refreshedSorter = composite.mdrOccupancy(inboundTrays, 'MDR_SORTER_SIDE')
+      for (let index = refreshedSorter.length - 2; index >= 0; index--) {
+        const tray = refreshedSorter[index]
+        if (tray && !refreshedSorter[index + 1] && !tray.pileRuntime) {
+          tray.pileRuntime = { transferring: true, transferRemainingSec: ZONE_TRANSFER_SEC - residualElapsedSec }
         }
       }
     }
@@ -468,12 +575,13 @@ export default class Milestone7Simulation {
       if (!destination) destination = this.selectReturnDestination()
       if (destination) {
         const direct = destination === 'C2'
-        const destinationOpen = !this.zonedOccupancy(destination)[0]
+        const destinationOpen = this.inboundEntranceOpen(destination)
         const pathOpen = direct ? destinationOpen : destinationOpen && !this.zonedOccupancy('S')[0]
         if (pathOpen) {
           xFinal.returnDestination = destination
           this.returnAssignments[destination][xFinal.loadState ?? 'EMPTY'] += 1
-          this.moveToZonedEntrance(xFinal, direct ? 'C2' : 'S')
+          if (direct) this.moveToInboundEntrance(xFinal, 'C2')
+          else this.moveToZonedEntrance(xFinal, 'S')
           this.sorterCursor = RETURN_DESTINATIONS[(RETURN_DESTINATIONS.indexOf(destination) + 1) % RETURN_DESTINATIONS.length]
           this.sorterSelectedDestination = destination
         } else {
@@ -485,8 +593,8 @@ export default class Milestone7Simulation {
     }
 
     const sFinal = this.zonedOccupancy('S')[ZONE_COUNTS.S - 1]
-    if (sFinal?.returnDestination && !this.zonedOccupancy(sFinal.returnDestination)[0]) {
-      this.moveToZonedEntrance(sFinal, sFinal.returnDestination)
+    if (sFinal?.returnDestination && this.inboundEntranceOpen(sFinal.returnDestination)) {
+      this.moveToInboundEntrance(sFinal, sFinal.returnDestination)
     }
   }
 
@@ -494,7 +602,7 @@ export default class Milestone7Simulation {
     const start = RETURN_DESTINATIONS.indexOf(this.sorterCursor)
     for (let offset = 0; offset < RETURN_DESTINATIONS.length; offset++) {
       const destination = RETURN_DESTINATIONS[(start + offset) % RETURN_DESTINATIONS.length]
-      const destinationOpen = !this.zonedOccupancy(destination)[0]
+      const destinationOpen = this.inboundEntranceOpen(destination)
       const pathOpen = destination === 'C2' ? destinationOpen : destinationOpen && !this.zonedOccupancy('S')[0]
       if (pathOpen) return destination
     }
@@ -508,7 +616,7 @@ export default class Milestone7Simulation {
       return
     }
     for (const destination of RETURN_DESTINATIONS) {
-      const final = this.zonedOccupancy(destination)[ZONE_COUNTS[destination] - 1]
+      const final = this.inboundFinalTray(destination)
       const times = this.exchangerAcceptanceTimes[destination]
       const last = times.at(-1) ?? -Infinity
       if (!final || this.timeSec < last + 8 - EPS) continue
@@ -522,6 +630,7 @@ export default class Milestone7Simulation {
     tray.currentSegmentId = conveyorId
     tray.positionFt = ZONE_LENGTH_FT / 2
     tray.zonePlacement = { conveyorId, zoneIndex: 0 }
+    tray.inboundPlacement = undefined
     tray.pilePlacement = undefined
     tray.pileRuntime = undefined
     tray.status = 'BLOCKED'
@@ -806,10 +915,11 @@ export default class Milestone7Simulation {
 
   private srsCurrentCounts(): Record<SrsPileId, number> {
     const pileCount = (source: SourceId) => this.trays.filter((tray) => tray.pilePlacement?.pileId === `${source}1`).length
-    const zonedCount = (conveyorId: 'T' | 'D' | 'A2' | 'B2' | 'C2') => this.trays.filter((tray) => tray.zonePlacement?.conveyorId === conveyorId).length
+    const zonedCount = (conveyorId: 'T' | 'D') => this.trays.filter((tray) => tray.zonePlacement?.conveyorId === conveyorId).length
+    const inboundCount = (conveyorId: ReturnDestination) => this.trays.filter((tray) => tray.inboundPlacement?.conveyorId === conveyorId).length
     return {
       A1: pileCount('A'), B1: pileCount('B'), C1: pileCount('C'),
-      T: zonedCount('T'), D: zonedCount('D'), A2: zonedCount('A2'), B2: zonedCount('B2'), C2: zonedCount('C2'),
+      T: zonedCount('T'), D: zonedCount('D'), A2: inboundCount('A2'), B2: inboundCount('B2'), C2: inboundCount('C2'),
     }
   }
 
@@ -851,7 +961,7 @@ export default class Milestone7Simulation {
   private dispatchInboundOnlyRobots() {
     for (const destination of RETURN_DESTINATIONS) {
       const source = destination[0] as SourceId
-      const tray = this.zonedOccupancy(destination)[ZONE_COUNTS[destination] - 1]
+      const tray = this.inboundFinalTray(destination)
       if (!tray || this.inboundReservations.has(tray.id)) continue
       const station = this.exchangerStations[source]
       const outboundCanService = station.dropRobotKind === 'OUTBOUND'
@@ -995,7 +1105,7 @@ export default class Milestone7Simulation {
 
   private takeInboundTray(source: SourceId, reservedTrayId?: number): Tray | undefined {
     const destination = `${source}2` as ReturnDestination
-    const tray = this.zonedOccupancy(destination)[ZONE_COUNTS[destination] - 1]
+    const tray = this.inboundFinalTray(destination)
     if (!tray || (reservedTrayId !== undefined && tray.id !== reservedTrayId)) return undefined
     const index = this.trays.indexOf(tray)
     if (index < 0) return undefined
@@ -1004,6 +1114,7 @@ export default class Milestone7Simulation {
     tray.positionFt = 0
     tray.status = 'MOVING'
     tray.zonePlacement = undefined
+    tray.inboundPlacement = undefined
     tray.pilePlacement = undefined
     tray.pileRuntime = undefined
     return tray
@@ -1044,7 +1155,7 @@ export default class Milestone7Simulation {
     const takeTime = station.shiftStartedAtSec + 1
     if (station.shiftingRobotKind === 'OUTBOUND') {
       const mission = this.missions.find(({ missionId }) => missionId === station.shiftingMissionId)!
-      const candidate = this.zonedOccupancy(`${source}2` as ReturnDestination)[ZONE_COUNTS[`${source}2` as ReturnDestination] - 1]
+      const candidate = this.inboundFinalTray(`${source}2` as ReturnDestination)
       if (candidate) this.cancelInboundReservation(candidate.id, takeTime)
       const tray = this.takeInboundTray(source)
       mission.takeArrivalTimeSec = takeTime
@@ -1238,9 +1349,13 @@ export default class Milestone7Simulation {
       return { pileId, beltRunning: exitAvailable, beltExitAvailable: exitAvailable, beltBlockedReason: exitAvailable ? null : 'DOWNSTREAM_MDR_ENTRANCE_OCCUPIED', beltTrayCount: belt.length, leadingBeltTrayId: leading?.id ?? null, leadingBeltTrayPositionFt: leading?.pilePlacement?.beltPosFt ?? null }
     })()
     const beltDiagnostics = (['A1', 'B1', 'C1'] as const).map(beltDiagnostic)
-    const returnAvailability = Object.fromEntries(RETURN_DESTINATIONS.map((destination) => [destination, !this.zonedOccupancy(destination)[0]])) as Record<ReturnDestination, boolean>
+    const returnAvailability = Object.fromEntries(RETURN_DESTINATIONS.map((destination) => [destination, this.inboundEntranceOpen(destination)])) as Record<ReturnDestination, boolean>
     const sHead = this.returnEnabled ? this.zonedOccupancy('S')[ZONE_COUNTS.S - 1] : null
-    const returnConveyorOccupancy = Object.fromEntries(RETURN_IDS.map((id) => [id, this.returnEnabled ? this.zonedOccupancy(id).filter(Boolean).length : 0])) as Record<(typeof RETURN_IDS)[number], number>
+    const returnConveyorOccupancy = Object.fromEntries(RETURN_IDS.map((id) => [id, this.returnEnabled
+      ? (RETURN_DESTINATIONS.includes(id as ReturnDestination)
+          ? this.trays.filter((tray) => tray.inboundPlacement?.conveyorId === id).length
+          : this.zonedOccupancy(id as ZonedId).filter(Boolean).length)
+      : 0])) as Record<(typeof RETURN_IDS)[number], number>
     const returnedToAsrsCount = this.returnedHistory.length
     const materialSinkCount = this.returnEnabled ? returnedToAsrsCount : this.consumedCount
     const cartonAttached = this.trays.filter((tray) => tray.payloadOrigin === 'CARTBUILD' && tray.cartbuildCartonAttached).length
@@ -1403,7 +1518,7 @@ export default class Milestone7Simulation {
     const outboundCompletedCount = completedCountByClassification.OUTBOUND_ONLY + completedCountByClassification.DUAL_CYCLE
     return {
       timeSec: this.timeSec,
-      trays: this.trays.map((tray) => ({ ...tray, pilePlacement: tray.pilePlacement ? { ...tray.pilePlacement } : undefined, zonePlacement: tray.zonePlacement ? { ...tray.zonePlacement } : undefined, pileRuntime: tray.pileRuntime ? { ...tray.pileRuntime } : undefined })),
+      trays: this.trays.map((tray) => ({ ...tray, pilePlacement: tray.pilePlacement ? { ...tray.pilePlacement } : undefined, zonePlacement: tray.zonePlacement ? { ...tray.zonePlacement } : undefined, inboundPlacement: tray.inboundPlacement ? { ...tray.inboundPlacement } : undefined, pileRuntime: tray.pileRuntime ? { ...tray.pileRuntime } : undefined })),
       segments: this.segments.map((segment) => ({ ...segment })), sources: this.sources.map((source) => ({ ...source })), source: { ...this.sources[0] }, mergeState,
       korber: { lastConsumptionTime: this.returnEnabled ? (this.korberProcessedCount ? this.timeSec : null) : (this.consumedCount ? this.nextConsumptionTime - KORBER_INTERVAL_SEC : null), totalConsumed: this.returnEnabled ? this.korberProcessedCount : this.consumedCount, ready: this.timeSec + EPS >= this.nextConsumptionTime || this.korberStarved, starved: this.korberStarved },
       missions: this.missions.map((mission) => ({ missionId: mission.missionId, assignedExchanger: mission.assignedExchanger, missionType: mission.missionType, createdAtSec: mission.createdAtSec, readyAtSec: mission.readyAtSec, state: mission.state })),

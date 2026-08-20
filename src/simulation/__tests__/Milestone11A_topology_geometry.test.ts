@@ -116,7 +116,7 @@ describe('Milestone 11A outbound topology and geometry', () => {
   })
 
   test('shared zoned conveyors use the authoritative position counts', () => {
-    expect(ZONE_COUNTS).toEqual({ PRE_T: 6, T: 12, D: 92, PURGE: 12, E: 28, X: 4, S: 8, A2: 36, B2: 29, C2: 29 })
+    expect(ZONE_COUNTS).toEqual({ PRE_T: 6, T: 12, D: 92, PURGE: 12, E: 28, X: 4, S: 8 })
   })
 
   test('SRS targets use D=92 and total 248', () => {

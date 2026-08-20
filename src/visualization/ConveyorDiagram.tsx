@@ -13,7 +13,7 @@ import type {
 
 interface Props { segments: ConveyorSegmentConfig[]; trays: Tray[]; state: SimulationStateWithProgress }
 type Orientation = 'horizontal' | 'vertical'
-type Region = 'MDR' | 'MDR_PRE_DETRAYER' | 'MDR_POST_DETRAYER' | 'BELT' | 'MDR_DOWNSTREAM'
+type Region = 'MDR' | 'MDR_PRE_DETRAYER' | 'MDR_POST_DETRAYER' | 'BELT' | 'MDR_DOWNSTREAM' | 'MDR_SORTER_SIDE' | 'SPIRAL' | 'MDR_EXCHANGER_SIDE'
 interface LayoutRect { x: number; y: number; w: number; h: number; conveyorId: string; region: Region; orientation: Orientation; zoneIndex?: number; reverse?: boolean }
 
 const VIEWBOX = { width: 1600, height: 1040 }
@@ -160,10 +160,13 @@ const ZONED_SPECS: Array<{ id: ZonedConveyorId; count: number; x: number; y: num
   { id: 'E', count: 28, x: 850, y: 330, length: 610, orientation: 'horizontal', reverse: true, label: 'E · 28 zones' },
   { id: 'X', count: 4, x: 794, y: 370, length: 120, orientation: 'vertical', label: 'X · 4 zones' },
   { id: 'S', count: 8, x: 488, y: 540, length: 74, orientation: 'horizontal', reverse: true, label: 'S · 8 zones' },
-  { id: 'A2', count: 36, x: 288, y: 590, length: 205, orientation: 'vertical', label: 'A2 · 36 zones' },
-  { id: 'B2', count: 29, x: 418, y: 590, length: 205, orientation: 'vertical', label: 'B2 · 29 zones' },
-  { id: 'C2', count: 29, x: 608, y: 590, length: 205, orientation: 'vertical', label: 'C2 · 29 zones' },
 ]
+
+const INBOUND_COMPOSITES = [
+  { id: 'A2', x: 300, y: 590, sorter: 33, capacity: 58 },
+  { id: 'B2', x: 430, y: 590, sorter: 26, capacity: 51 },
+  { id: 'C2', x: 620, y: 590, sorter: 26, capacity: 51 },
+] as const
 
 const PILES = [
   { id: 'A1', x: 300, pre: 5, post: 5, beltFt: 41, beltHeight: 100, downstream: 15, label: 'A1 · 45 positions' },
@@ -232,13 +235,33 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
     }
   }
 
+  for (const composite of INBOUND_COMPOSITES) {
+    if (!segments.some((segment) => segment.id === composite.id)) continue
+    const sorterHeight = 120
+    const spiralHeight = 60
+    const exchangerHeight = 25
+    for (let index = 0; index < composite.sorter; index++) {
+      layouts.set(`${composite.id}:MDR_SORTER_SIDE:${index}`, { x: composite.x - ZONE_THICKNESS / 2, y: composite.y + index * sorterHeight / composite.sorter, w: ZONE_THICKNESS, h: sorterHeight / composite.sorter, conveyorId: composite.id, region: 'MDR_SORTER_SIDE', orientation: 'vertical', zoneIndex: index })
+    }
+    layouts.set(`${composite.id}:SPIRAL`, { x: composite.x - ZONE_THICKNESS / 2, y: composite.y + sorterHeight, w: ZONE_THICKNESS, h: spiralHeight, conveyorId: composite.id, region: 'SPIRAL', orientation: 'vertical' })
+    for (let index = 0; index < 5; index++) {
+      layouts.set(`${composite.id}:MDR_EXCHANGER_SIDE:${index}`, { x: composite.x - ZONE_THICKNESS / 2, y: composite.y + sorterHeight + spiralHeight + index * exchangerHeight / 5, w: ZONE_THICKNESS, h: exchangerHeight / 5, conveyorId: composite.id, region: 'MDR_EXCHANGER_SIDE', orientation: 'vertical', zoneIndex: index })
+    }
+  }
+
   const trayPositions = trays.map((tray) => {
     if (tray.korberHeld) return { tray, x: 1540, y: 140, width: 18, orientation: 'horizontal' as Orientation, segment: 'KORBER' }
     let layout: LayoutRect | undefined
-    if (tray.zonePlacement) layout = layouts.get(`${tray.zonePlacement.conveyorId}:MDR:${tray.zonePlacement.zoneIndex}`)
+    if (tray.inboundPlacement?.component === 'SPIRAL') layout = layouts.get(`${tray.inboundPlacement.conveyorId}:SPIRAL`)
+    else if (tray.inboundPlacement) layout = layouts.get(`${tray.inboundPlacement.conveyorId}:${tray.inboundPlacement.component}:${tray.inboundPlacement.zoneIndex ?? 0}`)
+    else if (tray.zonePlacement) layout = layouts.get(`${tray.zonePlacement.conveyorId}:MDR:${tray.zonePlacement.zoneIndex}`)
     else if (tray.pilePlacement?.component === 'BELT') layout = layouts.get(`${tray.pilePlacement.pileId}:BELT`)
     else if (tray.pilePlacement) layout = layouts.get(`${tray.pilePlacement.pileId}:${tray.pilePlacement.component}:${tray.pilePlacement.zoneIndex ?? 0}`)
     if (!layout) return { tray, x: 28, y: 810, width: 12, orientation: 'horizontal' as Orientation, segment: tray.currentSegmentId }
+    if (tray.inboundPlacement?.component === 'SPIRAL') {
+      const progress = Math.max(0, Math.min(1, (tray.inboundPlacement.spiralPosFt ?? 1) / 41))
+      return { tray, x: layout.x + layout.w / 2, y: layout.y + progress * layout.h, width: layout.w, orientation: layout.orientation, segment: tray.inboundPlacement.conveyorId }
+    }
     if (tray.pilePlacement?.component === 'BELT') {
       const pile = PILES.find(({ id }) => id === tray.pilePlacement?.pileId)!
       const progress = Math.max(0, Math.min(1, (tray.pilePlacement.beltPosFt ?? 0) / pile.beltFt))
@@ -250,6 +273,7 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
   const sectionLabels = [
     ...ZONED_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => ({ id: spec.id, text: spec.label, x: spec.orientation === 'horizontal' ? spec.x + spec.length / 2 : spec.x + 22, y: spec.orientation === 'horizontal' ? spec.y - 24 : spec.y + spec.length / 2, anchor: spec.orientation === 'horizontal' ? 'middle' : 'start', rotate: spec.orientation === 'vertical' })),
     ...PILES.map((pile) => ({ id: pile.id, text: pile.label, x: pile.x - 25, y: 350, anchor: 'middle', rotate: true })),
+    ...INBOUND_COMPOSITES.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => ({ id: spec.id, text: `${spec.id} · ${spec.capacity} positions`, x: spec.x + 22, y: spec.y + 102, anchor: 'middle', rotate: true })),
   ]
   const visualRobots = activeVisualRobots(state)
   const individualRobots = visualRobots.filter((robot) => isIndividuallyRendered(robot, state))
@@ -348,7 +372,7 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
 
       <g aria-label="Conveyor zones" data-conveyor-bounds="S" data-bounds-x="480" data-bounds-y="504" data-bounds-width="90" data-bounds-height="48">
         {Array.from(layouts.entries()).map(([key, layout]) => {
-          const zoneId = layout.zoneIndex === undefined ? undefined : key
+          const zoneId = layout.zoneIndex === undefined && layout.region !== 'SPIRAL' ? undefined : key
           const fill = layout.region === 'BELT' ? COLORS.belt : layout.region === 'MDR' ? COLORS.conveyor : '#d2dde2'
           return <g key={key} data-zone-id={zoneId} data-conveyor-id={layout.conveyorId} data-region={layout.region} data-zone-index={layout.zoneIndex}>
             <rect x={layout.x} y={layout.y} width={layout.w} height={layout.h} fill={fill} stroke={layout.region === 'BELT' ? COLORS.beltEdge : COLORS.conveyorEdge} strokeWidth={layout.region === 'BELT' ? 2 : 1} />

@@ -137,9 +137,9 @@ describe('ConveyorDiagram rendering integrity', () => {
     held.purgeMember = true
     const markup = renderEngine(engine)
     const zoneIds = attributeValues(markup, 'data-zone-id')
-    expect(zoneIds).toHaveLength(317)
+    expect(zoneIds).toHaveLength(326)
     expect(new Set(zoneIds).size).toBe(zoneIds.length)
-    for (const id of ['PURGE:MDR:11', 'E:MDR:27', 'X:MDR:3', 'S:MDR:7', 'A2:MDR:35', 'B2:MDR:28', 'C2:MDR:28']) expect(zoneIds).toContain(id)
+    for (const id of ['PURGE:MDR:11', 'E:MDR:27', 'X:MDR:3', 'S:MDR:7', 'A2:MDR_SORTER_SIDE:32', 'A2:SPIRAL', 'A2:MDR_EXCHANGER_SIDE:4', 'B2:MDR_SORTER_SIDE:25', 'C2:MDR_EXCHANGER_SIDE:4']) expect(zoneIds).toContain(id)
     expect(markup).toContain(`data-tray-id="${held.id}"`)
     expect(attributeValues(markup, 'data-tray-id').filter((id) => Number(id) === held.id)).toHaveLength(1)
     expect(markup).toContain('data-load-state="FULL"')
@@ -151,7 +151,7 @@ describe('ConveyorDiagram rendering integrity', () => {
     const engine = new SimulationEngine(RETURN_SEGMENTS)
     const markup = renderEngine(engine)
     const zoneIds = attributeValues(markup, 'data-zone-id')
-    const expected = { PRE_T: 6, T: 12, D: 92, PURGE: 12, E: 28, X: 4, S: 8, A2: 36, B2: 29, C2: 29 }
+    const expected = { PRE_T: 6, T: 12, D: 92, PURGE: 12, E: 28, X: 4, S: 8 }
     for (const [id, count] of Object.entries(expected)) expect(zoneIds.filter((zoneId) => zoneId.startsWith(`${id}:MDR:`))).toHaveLength(count)
     for (const pile of ['A1', 'B1', 'C1']) {
       expect(markup).toContain(`data-conveyor-id="${pile}" data-region="MDR_PRE_DETRAYER"`)
@@ -159,7 +159,14 @@ describe('ConveyorDiagram rendering integrity', () => {
       expect(markup).toContain(`data-conveyor-id="${pile}" data-region="BELT"`)
       expect(markup).toContain(`data-conveyor-id="${pile}" data-region="MDR_DOWNSTREAM"`)
     }
-    for (const label of ['A1 · 45 positions', 'B1 · 38 positions', 'C1 · 38 positions', 'PRE_T · 6 zones', 'T · 12 zones', 'D · 92 zones', 'PURGE · 12 zones', 'E · 28 zones', 'X · 4 zones', 'S · 8 zones', 'A2 · 36 zones', 'B2 · 29 zones', 'C2 · 29 zones', 'KÖRBER', 'A EXCHANGER', 'B EXCHANGER', 'C EXCHANGER']) expect(markup).toContain(label)
+    expect(zoneIds.filter((id) => id.startsWith('A2:MDR_SORTER_SIDE:'))).toHaveLength(33)
+    expect(zoneIds.filter((id) => id.startsWith('B2:MDR_SORTER_SIDE:'))).toHaveLength(26)
+    expect(zoneIds.filter((id) => id.startsWith('C2:MDR_SORTER_SIDE:'))).toHaveLength(26)
+    for (const id of ['A2', 'B2', 'C2']) {
+      expect(zoneIds.filter((zoneId) => zoneId.startsWith(`${id}:MDR_EXCHANGER_SIDE:`))).toHaveLength(5)
+      expect(zoneIds).toContain(`${id}:SPIRAL`)
+    }
+    for (const label of ['A1 · 45 positions', 'B1 · 38 positions', 'C1 · 38 positions', 'PRE_T · 6 zones', 'T · 12 zones', 'D · 92 zones', 'PURGE · 12 zones', 'E · 28 zones', 'X · 4 zones', 'S · 8 zones', 'A2 · 58 positions', 'B2 · 51 positions', 'C2 · 51 positions', 'KÖRBER', 'A EXCHANGER', 'B EXCHANGER', 'C EXCHANGER']) expect(markup).toContain(label)
   })
 
   test('renders every implemented route as a unique semantic connector', () => {

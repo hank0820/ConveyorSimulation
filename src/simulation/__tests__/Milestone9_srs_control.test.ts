@@ -91,11 +91,11 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
       { id: 3, currentSegmentId: 'T', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', loadState: 'FULL', zonePlacement: { conveyorId: 'T', zoneIndex: 0 } },
       { id: 4, currentSegmentId: 'D', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', loadState: 'EMPTY', zonePlacement: { conveyorId: 'D', zoneIndex: 0 } },
       { id: 5, currentSegmentId: 'E', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', loadState: 'FULL', zonePlacement: { conveyorId: 'E', zoneIndex: 0 } },
-      { id: 6, currentSegmentId: 'A2', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', loadState: 'FULL', zonePlacement: { conveyorId: 'A2', zoneIndex: 0 } },
+      { id: 6, currentSegmentId: 'A2', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', loadState: 'FULL', inboundPlacement: { conveyorId: 'A2', component: 'MDR_SORTER_SIDE', zoneIndex: 0 } },
       { id: 7, currentSegmentId: 'B1', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'B', loadState: 'EMPTY', pilePlacement: { pileId: 'B1', component: 'BELT', beltPosFt: 1 } },
       { id: 8, currentSegmentId: 'C1', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'C', loadState: 'FULL', pilePlacement: { pileId: 'C1', component: 'MDR_DOWNSTREAM', zoneIndex: 0 } },
-      { id: 9, currentSegmentId: 'B2', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'B', loadState: 'EMPTY', zonePlacement: { conveyorId: 'B2', zoneIndex: 0 } },
-      { id: 10, currentSegmentId: 'C2', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'C', loadState: 'FULL', zonePlacement: { conveyorId: 'C2', zoneIndex: 0 } },
+      { id: 9, currentSegmentId: 'B2', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'B', loadState: 'EMPTY', inboundPlacement: { conveyorId: 'B2', component: 'MDR_SORTER_SIDE', zoneIndex: 0 } },
+      { id: 10, currentSegmentId: 'C2', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'C', loadState: 'FULL', inboundPlacement: { conveyorId: 'C2', component: 'MDR_SORTER_SIDE', zoneIndex: 0 } },
     ]
     expect(srs(engine).current).toEqual({ A1: 1, B1: 1, C1: 1, T: 1, D: 1, A2: 1, B2: 1, C2: 1 })
     expect(srs(engine).globalCurrent).toBe(8)
@@ -161,7 +161,7 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
       ...Array.from({ length: 30 }, (_, index) => pileTray(index + 1, 'A', index < 5 ? 'MDR_PRE_DETRAYER' : index < 10 ? 'MDR_POST_DETRAYER' : 'MDR_DOWNSTREAM', index < 5 ? index : index < 10 ? index - 5 : index - 10)),
       ...Array.from({ length: 2 }, (_, index) => zonedTray(100 + index, 'T', index)),
       ...Array.from({ length: 80 }, (_, index) => zonedTray(200 + index, 'D', index)),
-      ...Array.from({ length: 10 }, (_, index) => zonedTray(300 + index, 'A2', index)),
+      ...Array.from({ length: 10 }, (_, index) => ({ ...zonedTray(300 + index, 'D', index), currentSegmentId: 'A2', zonePlacement: undefined, inboundPlacement: { conveyorId: 'A2' as const, component: 'MDR_SORTER_SIDE' as const, zoneIndex: index } })),
     ]
     runtime.missions = Array.from({ length: 5 }, (_, index) => ({ missionId: index + 1, assignedExchanger: 'A' as const, missionType: 'CARTBUILD' as const, createdAtSec: 0, readyAtSec: 180, state: 'RETRIEVING' as const }))
     const state = srs(engine)
@@ -267,7 +267,7 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
     runtime.authorizePurgeIfNeeded()
     expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([12, 10, 9, 8, 7, 6])
     expect(runtime.activePurgeBatch?.authorizedTrayIds).not.toContain(11)
-    runtime.trays.push(zonedTray(60, 'A2', 0))
+    runtime.trays.push({ ...zonedTray(60, 'D', 0), currentSegmentId: 'A2', zonePlacement: undefined, inboundPlacement: { conveyorId: 'A2', component: 'MDR_SORTER_SIDE', zoneIndex: 0 } })
     runtime.authorizePurgeIfNeeded()
     expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([12, 10, 9, 8, 7, 6])
   })

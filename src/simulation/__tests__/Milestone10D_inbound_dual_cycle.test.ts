@@ -42,16 +42,15 @@ type Runtime = {
 const runtimeOf = (engine: SimulationEngine) => (engine as unknown as { milestone7: Runtime }).milestone7
 const stateOf = (engine: SimulationEngine) => engine.getState().asrsRobotSystem
 const destinationFor = (source: SourceId) => `${source}2` as 'A2' | 'B2' | 'C2'
-const finalZoneFor = (source: SourceId) => source === 'A' ? 35 : 28
-
 const placeFinalTray = (engine: SimulationEngine, source: SourceId, loadState: TrayLoadState = 'EMPTY') => {
   const runtime = runtimeOf(engine)
   const tray = runtime.trays.find((candidate) => candidate.zonePlacement?.conveyorId === 'D')!
   tray.pilePlacement = undefined
   tray.pileRuntime = undefined
-  tray.zonePlacement = { conveyorId: destinationFor(source), zoneIndex: finalZoneFor(source) }
+  tray.zonePlacement = undefined
+  tray.inboundPlacement = { conveyorId: destinationFor(source), component: 'MDR_EXCHANGER_SIDE', zoneIndex: 4 }
   tray.currentSegmentId = destinationFor(source)
-  tray.positionFt = (finalZoneFor(source) + 0.5) * 2.5
+  tray.positionFt = (source === 'A' ? 123.5 : 106) + 11.25
   tray.loadState = loadState
   tray.status = 'BLOCKED'
   return tray
