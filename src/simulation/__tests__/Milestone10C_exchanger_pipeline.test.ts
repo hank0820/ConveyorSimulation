@@ -33,7 +33,11 @@ type Runtime = {
 const runtimeOf = (engine: SimulationEngine) => (engine as unknown as { milestone7: Runtime }).milestone7
 const pipeline = (engine: SimulationEngine, source: SourceId) => engine.getState().asrsRobotSystem.exchangers[source]
 const clearEntrance = (runtime: Runtime, source: SourceId) => {
-  runtime.trays = runtime.trays.filter((tray) => !(tray.pilePlacement?.pileId === `${source}1` && tray.pilePlacement.component === 'MDR_UPSTREAM' && tray.pilePlacement.zoneIndex === 0))
+  runtime.trays = runtime.trays.filter((tray) => !(tray.pilePlacement?.pileId === `${source}1` && tray.pilePlacement.component === 'MDR_PRE_DETRAYER' && tray.pilePlacement.zoneIndex === 0))
+}
+const blockEntrance = (runtime: Runtime, source: SourceId) => {
+  const tray = runtime.trays.find((candidate) => candidate.pilePlacement?.pileId === `${source}1`)!
+  tray.pilePlacement = { pileId: `${source}1`, component: 'MDR_PRE_DETRAYER', zoneIndex: 0 }
 }
 const ready = (engine: SimulationEngine, source: SourceId, count = 1) => {
   const runtime = runtimeOf(engine)
@@ -47,6 +51,7 @@ const ready = (engine: SimulationEngine, source: SourceId, count = 1) => {
   runtime.timeSec = 200
   runtime.asrsLastRelease = { A: Number.MAX_VALUE, B: Number.MAX_VALUE, C: Number.MAX_VALUE }
   runtime.asrsLastRelease[source] = -1e9
+  blockEntrance(runtime, source)
   return { runtime, missions }
 }
 const assertBalances = (engine: SimulationEngine) => {
@@ -185,9 +190,9 @@ describe('Milestone 10C exchanger DROP/TAKE pipeline', () => {
     runtime.cartons = [{ internalKey: 1, laneId: 'CARTBUILD_A', zoneIndex: 0 }]
     runtime.attemptExchangerReleases()
     const tray = runtime.trays.find(({ id }) => id === missions[0].payloadTrayId)!
-    tray.pilePlacement!.zoneIndex = 2
+    tray.pilePlacement!.zoneIndex = 4
     for (let tick = 0; tick < 20; tick++) runtime.processPiles(0.1)
-    expect(tray).toMatchObject({ loadState: 'FULL', cartbuildCartonAttached: true, pilePlacement: { zoneIndex: 2 } })
+    expect(tray).toMatchObject({ loadState: 'FULL', cartbuildCartonAttached: true, pilePlacement: { zoneIndex: 4 } })
   })
 
   test('DROP-to-TAKE shifting lasts exactly one simulated second and history follows rack return', () => {
@@ -218,6 +223,7 @@ describe('Milestone 10C exchanger DROP/TAKE pipeline', () => {
     for (const mission of runtime.missions) { mission.state = 'READY_AT_EXCHANGER'; mission.robotState = 'QUEUED_FOR_DROP' }
     runtime.timeSec = 200
     runtime.asrsLastRelease = { A: -1e9, B: -1e9, C: Number.MAX_VALUE }
+    blockEntrance(runtime, 'B')
     clearEntrance(runtime, 'A')
     runtime.attemptExchangerReleases()
     expect(pipeline(engine, 'B').dropBlocked).toBe(true)
@@ -261,6 +267,7 @@ describe('Milestone 10C exchanger DROP/TAKE pipeline', () => {
     for (const mission of runtime.missions) { mission.state = 'READY_AT_EXCHANGER'; mission.robotState = 'QUEUED_FOR_DROP' }
     runtime.timeSec = 200
     runtime.asrsLastRelease = { A: -1e9, B: -1e9, C: -1e9 }
+    blockEntrance(runtime, 'A')
     clearEntrance(runtime, 'B'); clearEntrance(runtime, 'C')
     runtime.attemptExchangerReleases()
     expect(pipeline(engine, 'A').dropBlocked).toBe(true)
@@ -297,10 +304,10 @@ describe('Milestone 10C exchanger DROP/TAKE pipeline', () => {
   test('Milestone 9, 10A, and 10B allocation, timing, and ownership remain valid', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const state = engine.getState()
-    expect([state.pendingA, state.pendingB, state.pendingC]).toEqual([27, 26, 26])
+    expect([state.pendingA, state.pendingB, state.pendingC]).toEqual([34, 33, 33])
     expect(state.missions.every(({ readyAtSec, createdAtSec }) => readyAtSec - createdAtSec === 180)).toBe(true)
-    expect(state.asrsRobotSystem).toMatchObject({ robotCarriedTrayCount: 79 })
-    expect([state.cartbuildSystem.lanes.CARTBUILD_A.availablePositions, state.cartbuildSystem.lanes.CARTBUILD_B.availablePositions, state.cartbuildSystem.lanes.CARTBUILD_C.availablePositions]).toEqual([3, 4, 4])
+    expect(state.asrsRobotSystem).toMatchObject({ robotCarriedTrayCount: 100 })
+    expect([state.cartbuildSystem.lanes.CARTBUILD_A.availablePositions, state.cartbuildSystem.lanes.CARTBUILD_B.availablePositions, state.cartbuildSystem.lanes.CARTBUILD_C.availablePositions]).toEqual([0, 0, 0])
     assertBalances(engine)
   })
 })

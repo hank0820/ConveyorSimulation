@@ -60,4 +60,21 @@ describe('SimulationControls panel', () => {
     expect(markup).toContain('PurgeDemand')
     expect(markup).toContain('T bypass')
   })
+
+  test('renders eight accessible target drafts, validation, dirty guidance, and disables Start', () => {
+    const state = new SimulationEngine(SEGMENTS).getState()
+    const selectedTargets = { A1: 'oops', B1: '16', C1: '16', T: '6', D: '92', A2: '36', B2: '29', C2: '29' }
+    const markup = renderToStaticMarkup(createElement(SimulationControls, {
+      state, playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onStartScenario: vi.fn(),
+      selectedTargets, targetErrors: { A1: 'Enter an integer from 1 to 999' }, targetsDirty: true, onTargetChange: vi.fn(),
+      onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, collapsed: false, onToggleCollapsed: vi.fn(),
+    }))
+    expect(markup).toContain('data-srs-target-controls="true"')
+    expect((markup.match(/aria-label="[A-Z0-9]+ target size"/g) ?? [])).toHaveLength(8)
+    expect(markup).toContain('aria-invalid="true"')
+    expect(markup).toContain('role="alert"')
+    expect(markup).toContain('Start Scenario</button>')
+    expect(markup).toContain('disabled=""')
+    expect(markup).toContain('Apply with Start Scenario')
+  })
 })

@@ -1,189 +1,104 @@
 # Conveyor Simulation
 
-A deterministic React and TypeScript model of a three-source conveyor system with hybrid accumulation piles, authoritative zero-pressure MDR zones, SRS-based ASRS replenishment, Körber processing, downstream return conveyors, and outbound cartbuild lanes.
+A deterministic React and TypeScript model of a three-source conveyor system with hybrid accumulation piles, authoritative zero-pressure MDR zones, SRS-based ASRS replenishment, Körber processing, cartbuild lanes, return conveyors, and ASRS robot dual cycles.
 
 ## Milestone status
 
-Milestone 10 is implemented and validated on top of the published Milestone 9 cartbuild and SRS model. It adds cartbuild-lane capacity reservations; outbound and inbound-only ASRS robot missions; per-exchanger DROP queues and persistent blocking; one-second DROP-to-TAKE movement; exact inbound tray reservations and dual-cycle pickup; ten-second rack return; robot visualization; and ASRS robot/exchanger diagnostics.
+Milestone 11 is implemented and validated. It builds on Milestone 10's cartbuild reservations, ASRS robots, exchanger queues, exact inbound reservations, and dual-cycle behavior without redesigning logical routing or control priority.
 
-Milestone 10 builds on the Milestone 9 SRS `PendingDemand` and lane `PurgeDemand` controller rather than replacing it. The established Milestone 7 outbound, Milestone 8 return-conveyor, and Milestone 9 cartbuild physics remain authoritative.
+Milestone 11 delivers:
 
-## Milestone 7 outbound topology
+- Refined outbound A1/B1/C1 physical composition and detrayer placement
+- Updated shared-conveyor zone counts
+- Authoritative A2/B2/C2 inbound composite conveyors with spiral physics
+- Configurable SRS `TargetSize` scenarios and target-based initialization
+- A refined full-system topology visualization with schematic spiral coils
 
-- A1 and B1 merge onto one shared `PRE_T` conveyor.
-- C1 bypasses `PRE_T` and enters `T` directly.
-- `PRE_T` contains 8 physical 2.5-foot zones.
-- `T` contains 12 physical 2.5-foot zones.
-- `D` contains 94 physical 2.5-foot zones.
-- All conveyors run at 120 ft/min; a zone transfer takes 1.25 seconds.
+## Milestone 11 outbound topology
 
-A1, B1, and C1 retain their hybrid MDR/belt/MDR accumulation geometry. `PRE_T`, `T`, and `D` use zone placement as authoritative engine state, with at most one tray in each semantic zone (`<conveyor>:MDR:<index>`).
+A1, B1, and C1 are hybrid accumulation piles in authoritative exchanger-to-discharge flow order.
 
-Reset creates 24 A trays, 16 B trays, 16 C trays, an empty `PRE_T` and `T`, and 94 D trays. IDs are globally unique and deterministic.
+| Pile | Pre-detrayer MDR | Detrayer | Post-detrayer MDR | Belt | Downstream MDR | Total length | Physical positions |
+|---|---:|---|---:|---:|---:|---:|---:|
+| A1 | 5 zones | Yes | 5 zones | 41 ft | 15 zones | 103.5 ft | 45 |
+| B1 | 5 zones | Yes | 5 zones | 41 ft | 8 zones | 86 ft | 38 |
+| C1 | 5 zones | Yes | 5 zones | 41 ft | 8 zones | 86 ft | 38 |
 
-Source release is controlled by the Milestone 9 lane `PurgeDemand` priorities described below. Each authorization freezes a deterministic batch boundary; new exchanger arrivals cannot join an active batch, and completion occurs only when its final authorized tray enters T.
+MDR zones are 2.5 feet long. At 120 ft/min, an unobstructed MDR transfer takes 1.25 simulated seconds. Each 41-foot belt holds at most 20 trays at two-foot pitch and has a 20.5-second nominal traversal.
 
-## Milestone 8 return lifecycle
+A blocked downstream MDR zone 0 stops the whole belt and rejects new belt entry. Detraying occurs after the first five MDR zones, between pre-detrayer zone 4 and post-detrayer zone 0. A loaded `CARTBUILD` split is atomic and requires both post-detrayer zone 0 and carton-lane zone 0 to be available. The same tray continues as `EMPTY`, while one carton enters the associated cartbuild lane. `EMPTY` trays cross the detrayer without creating cartons.
 
-ASRS-released `EMPTY` trays can flow through D to Körber. Körber processes only a tray physically occupying D zone 93, at 1,050 trays/hour. Processing preserves the tray ID and transforms its load state from `EMPTY` to `FULL`; it does not create or destroy a tray.
+### Shared conveyors
 
-The completed `FULL` tray enters E when E zone 0 is available. If E is blocked, exactly one completed tray remains at the Körber discharge with an authoritative hold placement. While that tray is held, Körber cannot process another D tray. After the hold clears into E, Körber waits a complete processing interval and does not accumulate catch-up demand.
+| Section | Physical zones | Length |
+|---|---:|---:|
+| `PRE_T` | 6 | 15 ft |
+| `T` | 12 | 30 ft |
+| `D` | 92 | 230 ft |
+| `PURGE` | 12 | 30 ft |
+| `E` | 28 | 70 ft |
+| `X` | 4 | 10 ft |
+| `S` | 8 | 20 ft |
 
-The return topology uses the same zero-pressure, one-tray-per-zone, residual-preserving 1.25-second MDR transfer model:
+A1 and B1 merge onto `PRE_T`; C1 enters `T` directly. `PURGE` remains the section name and has 12 physical zones, while its frozen physical T-bypass batch remains exactly six trays. Existing source-batch priority, slug control, T arbitration, E-over-PURGE merge priority, and return-sorter routing are unchanged.
 
-| Conveyor | Zones | Length | Purpose |
-|---|---:|---:|---|
-| `PURGE` | 6 | 15 ft | `EMPTY` diversion from T |
-| `E` | 35 | 87.5 ft | `FULL` output from Körber |
-| `X` | 5 | 12.5 ft | Shared `EMPTY`/`FULL` return path |
-| `S` | 8 | 20 ft | Shared route to A2 and B2 |
-| `A2` | 36 | 90 ft | A exchanger take side |
-| `B2` | 29 | 72.5 ft | B exchanger take side |
-| `C2` | 29 | 72.5 ft | Direct C exchanger take side |
+Körber processes the tray in D's final physical zone 91 at 1,050 trays/hour. Processing preserves tray identity and changes `EMPTY` to `FULL`. If E zone 0 is unavailable, exactly one processed tray remains held at the Körber discharge and blocks further processing until it can enter E.
 
-### Return merge and sorter
+## Milestone 11 inbound topology
 
-E and PURGE merge into X. A physically ready `FULL` E tray has strict priority over a physically ready `EMPTY` PURGE tray. If E is not physically eligible, PURGE may proceed.
+Inbound composite flow is from the return sorter toward the corresponding exchanger TAKE station.
 
-At the return sorter, an independent cursor cycles A2 → B2 → C2 → A2. It skips unavailable destinations and advances only after a successful physical transfer. The selected destination is frozen on the tray:
+| Composite | Sorter-side MDR | Spiral | Exchanger-side MDR | Total length | Physical positions |
+|---|---:|---:|---:|---:|---:|
+| A2 | 33 zones | 41 ft | 5 zones | 136 ft | 58 |
+| B2 | 26 zones | 41 ft | 5 zones | 118.5 ft | 51 |
+| C2 | 26 zones | 41 ft | 5 zones | 118.5 ft | 51 |
 
-- C2-bound trays route directly from X to C2.
-- A2- and B2-bound trays share S before entering their destination branch.
-- The leading S tray controls discharge. If its destination is blocked, following trays cannot overtake it for the other branch.
+Each spiral uses the same whole-device stop/interlock model as an outbound belt. It has 20 physical tray positions at two-foot pitch and a 20.5-second nominal traversal. If exchanger-side zone 0 is blocked, the complete spiral stops and rejects entry from the sorter-side MDR bank. Restart preserves tray order and spacing.
 
-In the full Milestone 10 configuration, a tray in the final A2, B2, or C2 zone remains physical until an ASRS robot picks up that exact tray at TAKE. The earlier independent 450-tray/hour return sinks remain only as compatibility behavior when the robot-enabled return/cartbuild topology is not present.
+Exchanger-side zone 4 is the exact inbound reservation and TAKE pickup point. A reserved tray remains physical until the matching robot takes that same tray ID. A2 and B2 continue through shared conveyor S; C2 remains the direct sorter branch. S retains head-of-line blocking. An inbound `CurrentCount` includes trays in the sorter-side MDR bank, spiral, and exchanger-side MDR bank exactly once.
 
-## Milestone 9 cartbuild topology
+## Configurable SRS targets
 
-`CARTBUILD_A`, `CARTBUILD_B`, and `CARTBUILD_C` are independent 30-zone carton conveyors associated with the shared A, B, and C ASRS exchangers. Each exchanger has one shared DROP-admission clock for outbound `EMPTY`, outbound `CARTBUILD`, and inbound-only robot work. Successful admissions are separated by at least eight simulated seconds; DROP-to-TAKE and return-to-rack timing are separate from this cadence.
+The operations panel exposes selected scenario targets separately from the active targets used by the engine.
 
-Every outbound ASRS mission has a 180-simulated-second retrieval time. Matured work uses the Milestone 10 priority and fixed DROP-ownership rules below; a following `EMPTY` robot cannot bypass a blocked `CARTBUILD` robot that already owns DROP.
-
-A `CARTBUILD` mission creates its loaded robot-carried tray at assignment. Successful DROP unload places that same tray at upstream MDR zone 0 of A1, B1, or C1. The loaded tray travels through upstream zones 0, 1, and 2. Detraying occurs atomically between zones 2 and 3:
-
-- The same tray ID enters zone 3 as `EMPTY`.
-- Exactly one anonymous carton marker enters zone 0 of the corresponding cartbuild lane.
-- The transfer waits until both destinations are available; no partial split occurs.
-
-The empty tray continues through the existing hybrid pile and outbound conveyor system. The carton advances independently through its 30-zone lane. Each lane's operator consumes a carton from its final zone at a maximum rate of 450 cartons/hour, using an independent eight-second clock.
-
-## Milestone 10 cartbuild reservations
-
-Each cartbuild lane has 30 physical positions. A `CARTBUILD` request reserves one position when its mission is created, and that commitment follows the carton through retrieval, robot transport, exchanger unload, detraying, cartbuild conveyor travel, and operator consumption.
-
-```text
-committedCartbuildPositions
-=
-pending CARTBUILD missions
-+ CARTBUILD cartons attached to released trays
-+ cartons physically on the cartbuild lane
-```
-
-```text
-availableCartbuildPositions
-=
-max(0, 30 - committedCartbuildPositions)
-```
-
-The snapshot exposes these quantities as `pendingMissionReservations`, `attachedTrayReservations`, `physicalLaneOccupancy`, `committedPositions`, and `availablePositions`. Robot-carried outbound payloads remain pending mission reservations until successful DROP unload; afterward, an attached carton reservation persists on the released tray until the atomic detrayer split moves it into physical lane occupancy.
-
-A `CARTBUILD` mission requires both applicable SRS capacity and an available cartbuild position. If cartbuild capacity is exhausted and KÖRBER is enabled, planning may fall back to `EMPTY`. `EMPTY` missions still require SRS capacity but are not throttled by cartbuild-lane capacity. A failed mission attempt creates no robot, payload, carton, or reservation and does not consume exchanger cadence.
-
-## Milestone 10 ASRS robot lifecycle
-
-The current model has infinite robot availability: every outbound mission immediately receives one unique robot and one unique payload tray. Assignment establishes ownership, increments the deterministic robot and tray IDs, and starts the 180-second retrieval/travel window. Robot-carried payloads are physical inventory but do not appear on a conveyor until a successful DROP unload.
-
-At maturity, each exchanger orders its queue by:
-
-1. `CARTBUILD`
-2. `EMPTY`
-3. `INBOUND_ONLY`
-4. Oldest assignment and mission ID within a type
-
-Each A/B/C exchanger has an independent, shared eight-second DROP-admission cadence. Admission gives the selected robot fixed DROP ownership. An outbound robot unloads its tray into upstream zone 0 of A1, B1, or C1; successful unload preserves tray identity, changes the mission from pending to released, and starts a one-second shift toward TAKE. If pile zone 0 is occupied, the DROP robot remains blocked with its payload and prevents following robots from passing. The failed unload does not advance the exchanger clock.
-
-For `CARTBUILD`, DROP admission depends on the pile entrance, not on cartbuild-lane zone 0. Carton-lane availability is enforced later at the existing atomic detrayer split between upstream MDR zones 2 and 3.
-
-## Inbound reservations and dual cycles
-
-A tray waiting in the final zone of A2, B2, or C2 remains in conveyor-owned physical inventory until TAKE pickup. Inbound reservations bind a robot mission to an exact tray ID. If no active-at-exchanger or matured outbound robot can serve a waiting tray under the implemented eligibility rules, the exchanger dispatches an inbound-only robot. A merely retrieving outbound robot does not prevent this dispatch.
-
-Inbound-only robots take the same 180-second approach, join the shared DROP queue behind matured `CARTBUILD` and `EMPTY` work, pass through DROP without an outbound payload, and shift to TAKE in one second. At TAKE:
-
-- An outbound robot that collects an available return tray becomes `DUAL_CYCLE`; without a tray it becomes `OUTBOUND_ONLY`.
-- An inbound-only robot that collects its reserved tray becomes `INBOUND_ONLY`.
-- A qualifying outbound robot may claim a tray reserved for an approaching inbound-only robot.
-
-Pre-admission cancellation removes the inbound-only robot from active work and records cancellation immediately. Post-admission cancellation preserves the admitted robot's DROP-to-TAKE/return lifecycle but prevents it from collecting the claimed tray. Cancelled robots are retained in history and are never reassigned.
-
-All returning robots take ten simulated seconds from TAKE to rack arrival. A picked-up tray remains robot-carried physical inventory during that interval. `returnedToAsrsCount` increments only at rack arrival, never at TAKE pickup.
-
-## Robot cycle history and diagnostics
-
-Completed history uses `DUAL_CYCLE`, `OUTBOUND_ONLY`, `INBOUND_ONLY`, and the source-level cancellation classification `CANCELLED_INBOUND_ONLY`. The operations panel presents the last category as cancelled/history-only work.
-
-Outbound dual utilization is:
-
-```text
-DUAL_CYCLE / (DUAL_CYCLE + OUTBOUND_ONLY)
-```
-
-`INBOUND_ONLY` and cancelled records are excluded. A zero denominator displays as `0%`.
-
-The collapsible **ASRS Robots** diagnostics show global active lifecycle and carried-payload counts; completed classifications, cancellations, and dual utilization; independent A/B/C queue depth and four-robot visible caps; DROP identity, blocking reason/duration, TAKE/shift identity, returning counts, timings, and maximum queue depth; and cartbuild-position and exact inbound-tray reservations. Stable semantic attributes and full-ID tooltips support deterministic inspection while visible IDs remain compact.
-
-## Robot visualization
-
-The schematic includes one shared ASRS rack boundary and separate A/B/C paths with explicit DROP and TAKE positions. Each exchanger renders the next four authoritative queued robots individually on one staging line, with Q1 closest to DROP. A one-second queue-advancement progress value animates Q2 toward Q1, Q3 toward Q2, Q4 toward Q3, and the next aggregate member toward Q4 without changing queue order.
-
-DROP, DROP-to-TAKE shift, TAKE, returning, and Q1-Q4 robots render individually. Outbound robots still in the 180-second travel window, matured queue overflow beginning at Q5, and other non-operationally positioned robots appear only in their exchanger's **ASRS Transit** aggregate. Aggregate transit robots intentionally do not claim individual travel coordinates.
-
-Every active robot is represented exactly once, either individually or in one aggregate. Individual payload rendering preserves tray semantics and nests a carton when the payload state carries carton semantics. Robot, mission, exchanger, queue, lifecycle, payload, aggregate-membership, and position semantics are exposed through SVG attributes and tooltips.
-
-## Operating modes and scenario startup
-
-The operations panel exposes four toggles:
-
-- `KORBER`
-- `CARTBUILD_A`
-- `CARTBUILD_B`
-- `CARTBUILD_C`
-
-All four default to ON. Changing a toggle during a run pauses playback without resetting the engine, physical trays, cartons, missions, active source batch, T bypass, or timing clocks. The new value affects only future mission eligibility. Existing pending missions and in-flight material are not discarded: missions may still mature and release, while trays and cartons continue under the normal downstream physical constraints after their producer is turned OFF.
-
-To start a clean operating scenario:
-
-1. Select the four operating toggles.
-2. Set the PendingDemand planning cadence in simulated seconds.
-3. Select **Start Scenario**.
-4. Confirm the new run is at time zero and remains paused.
-5. Select **Play** to advance simulated time.
-
-**Start Scenario** clears and recreates all simulation and material state, applies the selected settings before planning, and runs the immediate time-zero planning cycle exactly once. It also clears robot missions, reservations, exchanger queues, cycle histories, and cancellations, then restarts mission, robot, tray, and carton IDs deterministically. **Pause** preserves the current run.
-
-The normal **Reset** action performs the same clean robot/material initialization but restores all four toggles to ON and the default 10-second planning cadence before producing the default 27/26/26 time-zero `CARTBUILD` allocation. This preserves the distinction between default Reset and configured Start Scenario.
-
-## SRS control model
-
-The SRS controller uses eight logical `TargetSize` values:
-
-| SRS pile | TargetSize |
+| Pile | Default `TargetSize` |
 |---|---:|
 | A1 | 24 |
 | B1 | 16 |
 | C1 | 16 |
 | T | 6 |
-| D | 73 |
+| D | 92 |
 | A2 | 36 |
 | B2 | 29 |
 | C2 | 29 |
-| **Total** | **229** |
+| **Total** | **248** |
 
-These values are control targets only. They do not redefine physical conveyor zone counts, capacities, lengths, geometry, reset inventory, or visualization dimensions. For example, T remains a 12-zone physical conveyor and D remains a 94-zone physical conveyor.
+Inputs accept integers from 1 through 999. Blank, nonnumeric, fractional, out-of-range, or otherwise invalid drafts remain visible, display validation, and disable **Start Scenario**. Editing pauses playback but does not reset the simulation or alter active engine targets. When selected and active values differ, the UI displays **Apply with Start Scenario**.
 
-`CurrentCount` counts authoritative physical trays in each of the eight SRS piles regardless of whether a tray is `EMPTY` or `FULL`. PRE_T, Körber-held trays, E, PURGE, X, S, and other non-SRS transport locations remain physical inventory but are not included in these eight SRS counts.
+**Start Scenario** atomically applies valid selected targets, selected operating toggles, and the planning cadence; clears prior physical and control state; initializes the new scenario at time zero; and runs immediate planning exactly once. **Reset** restores all eight target defaults, all four operating toggles to ON, the ten-second planning cadence, and deterministic default initialization.
 
-`PendingDemand` for A, B, or C counts every created mission for that exchanger until its tray physically enters upstream MDR zone 0 of A1, B1, or C1. A mission therefore remains pending while retrieving, after maturity while blocked, and while waiting for exchanger headway or higher-priority work.
+### Target-based initialization
+
+Only A1, B1, C1, and D initialize from their targets. T, A2, B2, C2, and transport sections start physically empty.
+
+```text
+initial physical count = min(TargetSize, physical capacity)
+```
+
+The configured `TargetSize` itself remains unclamped. For example, A1 may have an active target of 60 while its physical initialization remains 45. Partial initial inventory fills from the downstream discharge end backward without overlap. Active targets drive SRS capacity, `PendingDemand`, lane `PurgeDemand`, and diagnostics.
+
+The default time-zero state is:
+
+- Target total: 248
+- Conveyor trays before planning: 148
+- Global availability before planning: 100
+- Immediate missions: 100
+- Mission types: 90 `CARTBUILD`, 10 `EMPTY`
+- Missions by exchanger: A = 34, B = 33, C = 33
+- Total physical trays after planning: 248, consisting of 148 conveyor trays and 100 robot-carried trays
+
+`CurrentCount` counts physical trays in the eight SRS piles regardless of load state. `PRE_T`, Körber-held trays, E, PURGE, X, S, and other transport locations remain physical inventory but are not included in those eight counts.
 
 Global reserved capacity is:
 
@@ -191,63 +106,93 @@ Global reserved capacity is:
 max(0, sum(TargetSize) - sum(CurrentCount) - sum(PendingDemand))
 ```
 
-Each lane also applies its positive local and downstream availability cap. Negative availability in one pile contributes zero and cannot cancel available space elsewhere.
-
-Lane release pressure is calculated independently for A1, B1, and C1:
+Lane release pressure remains:
 
 ```text
 lanePurgeDemand = CurrentCount - TargetSize + PendingDemand
 ```
 
-Lane `PurgeDemand` is a signed control quantity and is not the physical six-tray T bypass batch.
+Lane `PurgeDemand` is a signed SRS control quantity and is distinct from the frozen six-tray physical T-bypass batch.
 
-The default planning cadence is 10 simulated seconds. Planning runs once immediately at time zero and then at 10, 20, 30 seconds, and so on. Starting from its independent cursor, the planner considers A → B → C cyclically, creates one eligible mission, advances the cursor only after successful creation, recalculates capacity, and repeats until no reservable capacity or eligible lane remains.
+## Cartbuild and scenario controls
 
-Mission type selection for an eligible lane is:
+`CARTBUILD_A`, `CARTBUILD_B`, and `CARTBUILD_C` are independent 30-position carton conveyors. A cartbuild request reserves one position from mission creation through robot transport, exchanger unload, detraying, conveyor travel, and operator consumption.
 
-1. Create `CARTBUILD` when that lane's cartbuild toggle is ON.
-2. Otherwise create `EMPTY` when `KORBER` is ON.
-3. Otherwise skip the lane.
+```text
+committedCartbuildPositions =
+  pending CARTBUILD missions
+  + CARTBUILD cartons attached to released trays
+  + cartons physically on the cartbuild lane
+```
 
-## Source-release control and T bypass
+Each cartbuild operator consumes from its final zone at no more than 450 cartons/hour. A `CARTBUILD` mission requires both SRS capacity and cartbuild capacity. If cartbuild capacity is exhausted and Körber is enabled, planning may select `EMPTY`; failed mission creation consumes no robot, tray, carton, reservation, or exchanger cadence.
 
-When no source batch is active, A1/B1/C1 source selection uses this priority:
+The operations panel exposes `KORBER`, `CARTBUILD_A`, `CARTBUILD_B`, and `CARTBUILD_C`. Changing a toggle pauses playback but preserves the current engine state; the new value affects future eligibility without discarding pending or in-flight work.
 
-1. Highest positive lane `PurgeDemand`.
-2. A physically full lane when positive `PurgeDemand` does not decide.
-3. The independent source round-robin cursor to resolve remaining ties.
+## Milestone 10 ASRS robots and dual cycles
 
-Every source authorization freezes its membership and is capped at eight trays. With positive lane `PurgeDemand`, the frozen quantity is limited by that positive demand, eight trays, and the physically releasable inventory. If D can accept and demand is not positive, up to eight physically releasable trays may be authorized. Positive lane `PurgeDemand` permits a source batch to discharge while D's entrance is blocked.
+The model retains Milestone 10's infinite robot availability: every outbound mission receives a unique robot and payload tray and begins a 180-second retrieval window. Matured work at each exchanger is ordered by `CARTBUILD`, then `EMPTY`, then `INBOUND_ONLY`, with oldest assignment and mission ID breaking ties.
 
-The physical T bypass is separate from lane `PurgeDemand`. When all 12 physical T zones are occupied and D's entrance is blocked, the controller freezes the six downstream-most eligible `EMPTY` tray IDs for diversion through the six-zone PURGE conveyor. Later arrivals cannot join, D reopening does not cancel the batch, and no selected tray may enter D.
+Each A/B/C exchanger has an independent shared eight-second DROP-admission cadence. Admission grants fixed DROP ownership. A blocked pile entrance leaves the outbound robot at DROP with its payload and prevents following robots from passing; a failed unload does not advance the cadence. Successful unloading preserves tray identity and begins a one-second DROP-to-TAKE shift.
 
-If a source batch is blocked behind full T, the physical six-tray T bypass takes precedence without cancelling or reselecting that source. The interrupted source retains its frozen membership and resumes after the bypass creates capacity. Source priorities are recalculated only after the interrupted batch completes.
+Inbound reservations bind a robot mission to an exact tray in exchanger-side zone 4. If no eligible outbound robot can serve it, an inbound-only robot is dispatched. At TAKE:
+
+- An outbound robot taking a return tray becomes `DUAL_CYCLE`.
+- An outbound robot without a return tray becomes `OUTBOUND_ONLY`.
+- An inbound-only robot taking its reserved tray becomes `INBOUND_ONLY`.
+- A qualifying outbound robot may claim a tray reserved for an approaching inbound-only robot under the existing cancellation rules.
+
+All returning robots take ten simulated seconds from TAKE to rack arrival. A picked-up tray remains robot-carried physical inventory during that interval, and `returnedToAsrsCount` increments only at rack arrival.
+
+Completed history uses `DUAL_CYCLE`, `OUTBOUND_ONLY`, `INBOUND_ONLY`, and `CANCELLED_INBOUND_ONLY`. Outbound dual utilization is:
+
+```text
+DUAL_CYCLE / (DUAL_CYCLE + OUTBOUND_ONLY)
+```
+
+## Visualization
+
+The full system is rendered on one responsive SVG with a `1600 × 1040` logical viewBox. It is operationally proportional but intentionally schematic rather than CAD-scale.
+
+- Every MDR zone and every physical conveyor tray is rendered exactly once.
+- Long sections such as D use stronger visual compression while retaining distinct zone boundaries.
+- Outbound 41-foot belts remain straight and visually distinct from MDR banks.
+- Inbound 41-foot spirals use compact four-turn schematic coils.
+- Spiral tray progress maps monotonically from `spiralPositionFt / 41` along the complete coil path.
+- A/B/C exchangers, DROP and TAKE stations, four visible queued robots per exchanger, individual operating robots, transit aggregates, payloads, and the shared rack remain visible.
+- Selected and active target controls remain beside the canvas.
+- Full IDs and placement semantics are retained in SVG attributes and tooltips while visible labels remain compact.
+
+Elevation, real spiral pitch, diameter, and exact revolutions are not simulated.
+
+## Routing and control behavior retained from earlier milestones
+
+Milestone 11 does not change:
+
+- Körber processing rate
+- Cartbuild operator rates
+- Shared eight-second exchanger cadence
+- Robot retrieval, DROP-to-TAKE, or ten-second return timing
+- Dual-cycle and cancellation rules
+- Source-batch priority and frozen membership
+- Six-tray T-bypass quantity
+- E-over-PURGE merge priority
+- A2 → B2 → C2 return-sorter order
+- Material-accounting definitions
+- Logical conveyor connections
 
 ## Ownership and material accounting
 
-Tray identity is preserved across conveyor and robot ownership. At any instant a tray belongs to exactly one authoritative category:
-
-- Conveyor-owned in `trays`, including hybrid piles, zoned conveyors, KÖRBER hold, and return final zones
-- Outbound robot-carried as `robotPayload`
-- Inbound return robot-carried as `inboundPayload`
-- Removed from physical inventory and retained in `returnSystem.returnedHistory` after rack arrival
-
-`createdTrayCount` is the total deterministic tray population created, including outbound robot payload trays created at mission assignment. `physicalTrayCount` is the sum of conveyor trays, outbound robot-carried trays, and inbound return robot-carried trays. `returnSystem.returnedToAsrsCount` is the number of trays whose robot has reached the rack. The implemented tray balance is:
+At any instant, a tray has exactly one authoritative owner: a conveyor placement, an outbound robot payload, an inbound return robot payload, or returned history after rack arrival.
 
 ```text
 materialBalanceError =
   createdTrayCount
   - physicalTrayCount
-  - returnSystem.returnedToAsrsCount
+  - returnedToAsrsCount
 ```
 
-Equivalently, while the return model is enabled:
-
-```text
-createdTrayCount = physicalTrayCount + returnSystem.returnedToAsrsCount
-```
-
-Carton identity follows its `CARTBUILD` payload from robot-carried tray to conveyor tray, through atomic detraying, along the cartbuild conveyor, and finally to operator consumption:
+Carton ownership moves atomically from robot-carried payload to conveyor tray, through detraying, along a cartbuild lane, and to operator consumption.
 
 ```text
 cartonBalanceError =
@@ -257,31 +202,29 @@ cartonBalanceError =
   - cartbuildCartonsConsumedByOperators
 ```
 
-`cartbuildCartonsAttachedToTrays` includes applicable outbound robot payloads, conveyor trays, and inbound return robot payloads. Robot-to-conveyor DROP and conveyor-to-robot TAKE transitions move ownership atomically; neither tray nor carton identities are duplicated. Both balance errors are exposed in diagnostics and are expected to remain zero.
+Both balance errors are exposed in diagnostics and remain zero in validated scenarios. Snapshots are immutable, and ownership transitions do not duplicate tray or carton identity.
 
 ## Validation status
 
-The current suite contains 263 deterministic tests across 22 files, with no skipped tests. Focused Milestone 10 coverage includes cartbuild capacity reservation, outbound robot ownership and maturity, persistent exchanger DROP/TAKE pipelines, inbound-only and dual-cycle behavior, cancellation history, exact tray/carton accounting, queue animation and exact-once visualization, diagnostics semantics, resets, and immutable snapshots. Earlier milestone regression coverage remains in the complete suite.
+The latest committed Milestone 11 validation passed:
 
-The latest validation passed:
-
-- 263/263 tests across 22 files
-- Focused Milestone 10 tests
+- 324/324 deterministic tests across 27 files
+- Focused Milestone 11A–11D tests
 - Lint
 - Standalone TypeScript compilation
 - Production build
-- Tray and carton material-balance checks
+- Tray and carton balance assertions
+- No skipped or pending tests
+- Manual desktop visualization acceptance at 1920 × 1080 and 1366 × 768
 
-One parallel full-suite run encountered wall-clock contention in an unchanged long-duration KÖRBER test. That test passed independently, and the complete 263-test suite passed with one worker and unchanged assertions, simulation durations, and timeout budgets. This was a test-execution contention event, not a production defect.
-
-The functional schematic displays the complete conveyor, cartbuild, and robot topology. The operations panel exposes operating settings, scenario startup, SRS control, lane `PurgeDemand`, the separate physical T bypass, material balances, robot lifecycle and payload counts, exchanger queue/DROP/TAKE/return state, reservations, completed classifications, cancellations, and dual utilization.
+After a computer restart, contention-safe non-overlapping test batches were used once to cover the complete suite under each test's committed timeout configuration. The same full suite also passed with one worker. This was validation-environment contention, not a product defect.
 
 ## Development
 
 ```bash
 npm install
 npm run dev
-npm test -- --run
+npm test -- --run --maxWorkers=1
 npm run lint
 npm run build
 ```
@@ -289,38 +232,21 @@ npm run build
 Standalone type-check:
 
 ```bash
-npx tsc -b
+npx tsc --noEmit
 ```
 
-## Implemented behavior versus future work
+## Known limitations and backlog
 
-Implemented now:
+The following capabilities are not implemented:
 
-- Authoritative outbound, return, and cartbuild conveyor physics
-- Unified `EMPTY` and `CARTBUILD` ASRS missions with SRS reserved-capacity control
-- Thirty-position cartbuild-lane commitment and fallback control
-- Outbound and inbound-only ASRS robot missions with exact payload ownership
-- Independent exchanger DROP queues, persistent blocking, shared eight-second admission, and one-second DROP-to-TAKE movement
-- Exact inbound tray reservations, dual-cycle pickup, cancellation history, and ten-second rack return
-- Same-ID Körber transformation and blocked-discharge hold
-- Atomic cartbuild detraying, independent carton lanes, and operator sinks
-- Frozen source batches, lane `PurgeDemand`, physical T bypass, E-priority merge, and return sorting
-- Clean configurable scenario startup and runtime-preserving operating toggles
-- Tray/carton accounting, exact-once robot visualization, and ASRS operations diagnostics
-
-Known limitations and future backlog:
-
-- Finite robot fleet capacity and robot reuse
-- Smarter robot reassignment and cancellation policies
-- Detailed rack navigation and CAD-derived robot travel paths
-- Robot faults and recovery behavior
-- More complete exchanger-side dependencies
+- Operator interference and manual tray insertion or removal
+- Variable machine, ASRS, robot, exchanger, and operator rates
+- CAD-derived dimensions and routing
+- Finite robot fleets and robot reuse
+- Robot faults, recovery, and reassignment
 - Scanner behavior
-- Carton order and group metadata
-- Operator interference through manual tray insertion or removal
-- Variable robot, machine, ASRS, and operator rates
-- Exact CAD-derived conveyor dimensions and routing
-- Returned-tray reintroduction through an explicit lifecycle transition
-- Team/vendor deployment and scenario sharing
-
-The schematic is intentionally compact and does not claim CAD accuracy. Robot movement and current dual-cycle coordination are simulated at the documented abstraction level; finite fleets, detailed rack routing, fault recovery, returned-tray reintroduction, deployment, and scenario sharing are not implemented.
+- Order grouping and carton metadata
+- Returned-tray reintroduction through an explicit lifecycle
+- Scenario saving and sharing
+- Deployment for teams and vendors
+- Exact elevation and physical spiral geometry

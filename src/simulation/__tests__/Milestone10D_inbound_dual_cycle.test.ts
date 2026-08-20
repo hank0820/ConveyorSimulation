@@ -42,28 +42,32 @@ type Runtime = {
 const runtimeOf = (engine: SimulationEngine) => (engine as unknown as { milestone7: Runtime }).milestone7
 const stateOf = (engine: SimulationEngine) => engine.getState().asrsRobotSystem
 const destinationFor = (source: SourceId) => `${source}2` as 'A2' | 'B2' | 'C2'
-const finalZoneFor = (source: SourceId) => source === 'A' ? 35 : 28
-
 const placeFinalTray = (engine: SimulationEngine, source: SourceId, loadState: TrayLoadState = 'EMPTY') => {
   const runtime = runtimeOf(engine)
   const tray = runtime.trays.find((candidate) => candidate.zonePlacement?.conveyorId === 'D')!
   tray.pilePlacement = undefined
   tray.pileRuntime = undefined
-  tray.zonePlacement = { conveyorId: destinationFor(source), zoneIndex: finalZoneFor(source) }
+  tray.zonePlacement = undefined
+  tray.inboundPlacement = { conveyorId: destinationFor(source), component: 'MDR_EXCHANGER_SIDE', zoneIndex: 4 }
   tray.currentSegmentId = destinationFor(source)
-  tray.positionFt = (finalZoneFor(source) + 0.5) * 2.5
+  tray.positionFt = (source === 'A' ? 123.5 : 106) + 11.25
   tray.loadState = loadState
   tray.status = 'BLOCKED'
   return tray
 }
 
 const openPileEntrance = (runtime: Runtime, source: SourceId) => {
-  const tray = runtime.trays.find((candidate) => candidate.pilePlacement?.pileId === `${source}1` && candidate.pilePlacement.component === 'MDR_UPSTREAM' && candidate.pilePlacement.zoneIndex === 0)
+  const tray = runtime.trays.find((candidate) => candidate.pilePlacement?.pileId === `${source}1` && candidate.pilePlacement.component === 'MDR_PRE_DETRAYER' && candidate.pilePlacement.zoneIndex === 0)
   if (tray) {
     tray.currentSegmentId = 'TEST_HOLD'
     tray.pilePlacement = undefined
     tray.pileRuntime = undefined
   }
+}
+
+const blockPileEntrance = (runtime: Runtime, source: SourceId) => {
+  const tray = runtime.trays.find((candidate) => candidate.pilePlacement?.pileId === `${source}1`)!
+  tray.pilePlacement = { pileId: `${source}1`, component: 'MDR_PRE_DETRAYER', zoneIndex: 0 }
 }
 
 const retainOutbound = (runtime: Runtime, source: SourceId, count = 1) => {
@@ -179,6 +183,7 @@ describe('Milestone 10D inbound reservations and dual cycles', () => {
     const { runtime, mission: inbound } = dispatchInbound(engine, 'A')
     const outbound = readyOutbound(runtime, 'A')[0]
     matureAt(runtime, inbound.maturityTimeSec)
+    blockPileEntrance(runtime, 'A')
     runtime.attemptExchangerReleases()
     expect(stateOf(engine).exchangers.A).toMatchObject({ dropRobotId: outbound.robotId, dropBlocked: true })
     expect(missionState(engine, inbound.robotId)).toBe('QUEUED_FOR_DROP')

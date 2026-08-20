@@ -1,5 +1,7 @@
 import type { FC, ReactNode } from 'react'
-import type { OperatingSettings, SimulationStateWithProgress, SourceId } from '../simulation/types'
+import type { OperatingSettings, SimulationStateWithProgress, SourceId, SrsPileId } from '../simulation/types'
+import type { SrsTargetDrafts } from '../srsTargetDrafts'
+import { SRS_TARGET_PILES } from '../simulation/srsTargets'
 
 interface Props {
   state: SimulationStateWithProgress
@@ -10,6 +12,10 @@ interface Props {
   onStep: () => void
   onReset: () => void
   onStartScenario: () => void
+  selectedTargets?: SrsTargetDrafts
+  targetErrors?: Partial<Record<SrsPileId, string>>
+  targetsDirty?: boolean
+  onTargetChange?: (pile: SrsPileId, value: string) => void
   onOperatingSettingChange: (setting: keyof OperatingSettings, enabled: boolean) => void
   onPlanningCadenceChange: (seconds: number) => void
   configurationNotice: string | null
@@ -82,7 +88,7 @@ const abbreviatedTrayId = (id: number | null) => id === null ? '—' : `T${Strin
 const secondsText = (seconds: number | null) => seconds === null ? '—' : `${seconds.toFixed(1)}s`
 
 const SimulationControls: FC<Props> = ({
-  state, playing, playbackSpeed, setPlaybackSpeed, onPlayPause, onStep, onReset, onStartScenario, onOperatingSettingChange, onPlanningCadenceChange, configurationNotice, collapsed, onToggleCollapsed,
+  state, playing, playbackSpeed, setPlaybackSpeed, onPlayPause, onStep, onReset, onStartScenario, selectedTargets, targetErrors = {}, targetsDirty = false, onTargetChange, onOperatingSettingChange, onPlanningCadenceChange, configurationNotice, collapsed, onToggleCollapsed,
 }) => {
   const purge = state.returnSystem.activePurgeBatch
   const frozenIds = purge?.authorizedTrayIds ?? state.returnSystem.lastCompletedPurgeBatch?.authorizedTrayIds ?? []
@@ -111,7 +117,12 @@ const SimulationControls: FC<Props> = ({
             <EnablementToggle label="Cartbuild B" setting="cartbuildBEnabled" enabled={state.operatingSettings.cartbuildBEnabled} onChange={onOperatingSettingChange} />
             <EnablementToggle label="Cartbuild C" setting="cartbuildCEnabled" enabled={state.operatingSettings.cartbuildCEnabled} onChange={onOperatingSettingChange} />
           </div>
-          <button className="start-scenario-button" type="button" onClick={onStartScenario}>Start Scenario</button>
+          {selectedTargets && <fieldset className="srs-target-controls" data-srs-target-controls>
+            <legend>SRS target sizes</legend>
+            {SRS_TARGET_PILES.map((pile) => <label key={pile}><span>{pile}</span><input aria-label={`${pile} target size`} aria-invalid={Boolean(targetErrors[pile])} aria-describedby={targetErrors[pile] ? `${pile}-target-error` : undefined} type="number" min="1" max="999" step="1" value={selectedTargets[pile]} onChange={(event) => onTargetChange?.(pile, event.currentTarget.value)} />{targetErrors[pile] && <small id={`${pile}-target-error`} role="alert">{targetErrors[pile]}</small>}</label>)}
+          </fieldset>}
+          <button className="start-scenario-button" type="button" disabled={Object.keys(targetErrors).length > 0} onClick={onStartScenario}>Start Scenario</button>
+          {targetsDirty && <p className="configuration-notice" role="status">Target edits are selected only. Apply with Start Scenario.</p>}
           {configurationNotice && <p className="configuration-notice" role="status">{configurationNotice}</p>}
         </section>
 

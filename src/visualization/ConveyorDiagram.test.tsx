@@ -63,54 +63,56 @@ function numericAttributes(markup: string, selector: string, attributes: string[
 }
 
 describe('ConveyorDiagram rendering integrity', () => {
-  test('150 physical trays render once with unique stable tray IDs', () => {
+  test('148 conveyor trays render once with unique stable tray IDs', () => {
     const markup = renderEngine(createEngine())
     const renderedIds = attributeValues(markup, 'data-tray-id').map(Number)
 
-    expect(renderedIds).toHaveLength(150)
-    expect(new Set(renderedIds).size).toBe(150)
-    expect(renderedIds.sort((a, b) => a - b)).toEqual(Array.from({ length: 150 }, (_, index) => index + 1))
+    expect(renderedIds).toHaveLength(148)
+    expect(new Set(renderedIds).size).toBe(148)
+    expect(renderedIds.sort((a, b) => a - b)).toEqual(Array.from({ length: 148 }, (_, index) => index + 1))
   })
 
   test('upstream and downstream zone identifiers are globally unique and semantic', () => {
     const markup = renderEngine(createEngine())
     const zoneIds = attributeValues(markup, 'data-zone-id')
 
-    expect(zoneIds).toHaveLength(167)
+    expect(zoneIds).toHaveLength(171)
     expect(new Set(zoneIds).size).toBe(zoneIds.length)
-    expect(zoneIds).toContain('A1:MDR_UPSTREAM:0')
+    expect(zoneIds).toContain('A1:MDR_PRE_DETRAYER:0')
+    expect(zoneIds).toContain('A1:MDR_POST_DETRAYER:0')
     expect(zoneIds).toContain('A1:MDR_DOWNSTREAM:0')
-    expect(zoneIds).toContain('B1:MDR_UPSTREAM:0')
-    expect(zoneIds).toContain('C1:MDR_DOWNSTREAM:6')
-    expect(zoneIds).toContain('PRE_T:MDR:7')
+    expect(zoneIds).toContain('B1:MDR_PRE_DETRAYER:0')
+    expect(zoneIds).toContain('B1:MDR_POST_DETRAYER:0')
+    expect(zoneIds).toContain('C1:MDR_DOWNSTREAM:7')
+    expect(zoneIds).toContain('PRE_T:MDR:5')
     expect(zoneIds).toContain('T:MDR:11')
-    expect(zoneIds).toContain('D:MDR:93')
+    expect(zoneIds).toContain('D:MDR:91')
   })
 
   test('advancing replaces a tray position without retaining its former rendered element', () => {
     const engine = createEngine()
     const initialMarkup = renderEngine(engine)
-    const initialX = renderedTrayX(initialMarkup, 149)
+    const initialX = renderedTrayX(initialMarkup, 147)
 
     engine.step(5)
     const advancedMarkup = renderEngine(engine)
-    const advancedX = renderedTrayX(advancedMarkup, 149)
+    const advancedX = renderedTrayX(advancedMarkup, 147)
 
     expect(advancedX).not.toBe(initialX)
-    expect(attributeValues(advancedMarkup, 'data-tray-id').filter((id) => id === '149')).toHaveLength(1)
+    expect(attributeValues(advancedMarkup, 'data-tray-id').filter((id) => id === '147')).toHaveLength(1)
   })
 
   test('reset removes runtime-created tray elements and restores initial rendering', () => {
     const engine = createEngine()
     engine.step(200)
     const advancedMarkup = renderEngine(engine)
-    expect(attributeValues(advancedMarkup, 'data-tray-id').some((id) => Number(id) > 150)).toBe(true)
+    expect(attributeValues(advancedMarkup, 'data-tray-id').some((id) => Number(id) > 148)).toBe(true)
 
     engine.reset()
     const resetMarkup = renderEngine(engine)
     const resetIds = attributeValues(resetMarkup, 'data-tray-id').map(Number)
-    expect(resetIds).toHaveLength(150)
-    expect(resetIds.every((id) => id <= 150)).toBe(true)
+    expect(resetIds).toHaveLength(148)
+    expect(resetIds.every((id) => id <= 148)).toBe(true)
   })
 
   test('an earlier snapshot is not mutated by later engine movement', () => {
@@ -127,7 +129,7 @@ describe('ConveyorDiagram rendering integrity', () => {
   test('return topology renders every semantic zone and tray lifecycle attributes', () => {
     const engine = new SimulationEngine(RETURN_SEGMENTS)
     const runtime = (engine as unknown as { milestone7: { trays: ReturnType<SimulationEngine['getState']>['trays'] } }).milestone7
-    const held = runtime.trays.find((tray) => tray.zonePlacement?.conveyorId === 'D' && tray.zonePlacement.zoneIndex === 93)!
+    const held = runtime.trays.find((tray) => tray.zonePlacement?.conveyorId === 'D' && tray.zonePlacement.zoneIndex === 91)!
     held.zonePlacement = undefined
     held.korberHeld = true
     held.loadState = 'FULL'
@@ -135,9 +137,9 @@ describe('ConveyorDiagram rendering integrity', () => {
     held.purgeMember = true
     const markup = renderEngine(engine)
     const zoneIds = attributeValues(markup, 'data-zone-id')
-    expect(zoneIds).toHaveLength(315)
+    expect(zoneIds).toHaveLength(326)
     expect(new Set(zoneIds).size).toBe(zoneIds.length)
-    for (const id of ['PURGE:MDR:5', 'E:MDR:34', 'X:MDR:4', 'S:MDR:7', 'A2:MDR:35', 'B2:MDR:28', 'C2:MDR:28']) expect(zoneIds).toContain(id)
+    for (const id of ['PURGE:MDR:11', 'E:MDR:27', 'X:MDR:3', 'S:MDR:7', 'A2:MDR_SORTER_SIDE:32', 'A2:SPIRAL', 'A2:MDR_EXCHANGER_SIDE:4', 'B2:MDR_SORTER_SIDE:25', 'C2:MDR_EXCHANGER_SIDE:4']) expect(zoneIds).toContain(id)
     expect(markup).toContain(`data-tray-id="${held.id}"`)
     expect(attributeValues(markup, 'data-tray-id').filter((id) => Number(id) === held.id)).toHaveLength(1)
     expect(markup).toContain('data-load-state="FULL"')
@@ -149,14 +151,22 @@ describe('ConveyorDiagram rendering integrity', () => {
     const engine = new SimulationEngine(RETURN_SEGMENTS)
     const markup = renderEngine(engine)
     const zoneIds = attributeValues(markup, 'data-zone-id')
-    const expected = { PRE_T: 8, T: 12, D: 94, PURGE: 6, E: 35, X: 5, S: 8, A2: 36, B2: 29, C2: 29 }
+    const expected = { PRE_T: 6, T: 12, D: 92, PURGE: 12, E: 28, X: 4, S: 8 }
     for (const [id, count] of Object.entries(expected)) expect(zoneIds.filter((zoneId) => zoneId.startsWith(`${id}:MDR:`))).toHaveLength(count)
     for (const pile of ['A1', 'B1', 'C1']) {
-      expect(markup).toContain(`data-conveyor-id="${pile}" data-region="MDR_UPSTREAM"`)
+      expect(markup).toContain(`data-conveyor-id="${pile}" data-region="MDR_PRE_DETRAYER"`)
+      expect(markup).toContain(`data-conveyor-id="${pile}" data-region="MDR_POST_DETRAYER"`)
       expect(markup).toContain(`data-conveyor-id="${pile}" data-region="BELT"`)
       expect(markup).toContain(`data-conveyor-id="${pile}" data-region="MDR_DOWNSTREAM"`)
     }
-    for (const label of ['A1 · 24', 'B1 · 16', 'C1 · 16', 'PRE_T · 8 zones', 'T · 12 zones', 'D · 94 zones', 'PURGE · 6 zones', 'E · 35 zones', 'X · 5 zones', 'S · 8 zones', 'A2 · 36 zones', 'B2 · 29 zones', 'C2 · 29 zones', 'KÖRBER', 'A EXCHANGER', 'B EXCHANGER', 'C EXCHANGER']) expect(markup).toContain(label)
+    expect(zoneIds.filter((id) => id.startsWith('A2:MDR_SORTER_SIDE:'))).toHaveLength(33)
+    expect(zoneIds.filter((id) => id.startsWith('B2:MDR_SORTER_SIDE:'))).toHaveLength(26)
+    expect(zoneIds.filter((id) => id.startsWith('C2:MDR_SORTER_SIDE:'))).toHaveLength(26)
+    for (const id of ['A2', 'B2', 'C2']) {
+      expect(zoneIds.filter((zoneId) => zoneId.startsWith(`${id}:MDR_EXCHANGER_SIDE:`))).toHaveLength(5)
+      expect(zoneIds).toContain(`${id}:SPIRAL`)
+    }
+    for (const label of ['A1 · 45 positions', 'B1 · 38 positions', 'C1 · 38 positions', 'PRE_T · 6 zones', 'T · 12 zones', 'D · 92 zones', 'PURGE · 12 zones', 'E · 28 zones', 'X · 4 zones', 'S · 8 zones', 'A2 · 58 positions', 'B2 · 51 positions', 'C2 · 51 positions', 'KÖRBER', 'A EXCHANGER', 'B EXCHANGER', 'C EXCHANGER']) expect(markup).toContain(label)
   })
 
   test('renders every implemented route as a unique semantic connector', () => {
@@ -277,6 +287,6 @@ describe('ConveyorDiagram rendering integrity', () => {
     expect(markup).toContain('data-carton-state="ON_CONVEYOR"')
     expect(markup).not.toContain('data-carton-id')
     expect(new Set(attributeValues(markup, 'data-tray-id')).size).toBe(attributeValues(markup, 'data-tray-id').length)
-    expect(new Set(attributeValues(markup, 'data-zone-id')).size).toBe(attributeValues(markup, 'data-zone-id').length - 3)
+    expect(new Set(attributeValues(markup, 'data-zone-id')).size).toBe(attributeValues(markup, 'data-zone-id').length)
   })
 })

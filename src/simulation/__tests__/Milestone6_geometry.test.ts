@@ -1,47 +1,28 @@
-import { test, expect } from 'vitest'
+import { expect, test } from 'vitest'
 import HybridAccumulationPile from '../HybridAccumulationPile'
 
-test('A1/B1/C1 geometry sums to 81 ft and expected MDR counts', () => {
-  const a1 = new HybridAccumulationPile({
-    pileId: 'A1',
-    totalLengthFt: 81,
-    upstreamMdrCount: 8,
-    downstreamMdrCount: 15,
-    beltLengthFt: 23.5,
-    mdrZoneLengthFt: 2.5,
-    trayLengthFt: 2.0,
-  })
+const createPile = (pileId: 'A1' | 'B1' | 'C1', downstreamMdrCount: number, totalLengthFt: number) => new HybridAccumulationPile({
+  pileId,
+  totalLengthFt,
+  preDetrayerMdrCount: 5,
+  postDetrayerMdrCount: 5,
+  downstreamMdrCount,
+  beltLengthFt: 41,
+  mdrZoneLengthFt: 2.5,
+  trayLengthFt: 2,
+})
 
-  expect(a1.getMdrPositions()).toBe(23)
-  expect(a1.getDesignPositions()).toBe(24)
-  const totalA = a1.config.upstreamMdrCount * a1.config.mdrZoneLengthFt + a1.config.beltLengthFt + a1.config.downstreamMdrCount * a1.config.mdrZoneLengthFt
-  expect(totalA).toBeCloseTo(81.0)
+test('A1/B1/C1 geometry exposes the Milestone 11A physical capacities', () => {
+  const a1 = createPile('A1', 15, 103.5)
+  expect(a1.getMdrPositions()).toBe(25)
+  expect(a1.getBeltPositions()).toBe(20)
+  expect(a1.getPhysicalCapacity()).toBe(45)
+  expect(a1.getNominalBeltTraversalSec(120)).toBeCloseTo(20.5)
 
-  const b1 = new HybridAccumulationPile({
-    pileId: 'B1',
-    totalLengthFt: 81,
-    upstreamMdrCount: 8,
-    downstreamMdrCount: 7,
-    beltLengthFt: 43.5,
-    mdrZoneLengthFt: 2.5,
-    trayLengthFt: 2.0,
-  })
-
-  expect(b1.getMdrPositions()).toBe(15)
-  expect(b1.getDesignPositions()).toBe(16)
-  const totalB = b1.config.upstreamMdrCount * b1.config.mdrZoneLengthFt + b1.config.beltLengthFt + b1.config.downstreamMdrCount * b1.config.mdrZoneLengthFt
-  expect(totalB).toBeCloseTo(81.0)
-
-  const c1 = new HybridAccumulationPile({
-    pileId: 'C1',
-    totalLengthFt: 81,
-    upstreamMdrCount: 8,
-    downstreamMdrCount: 7,
-    beltLengthFt: 43.5,
-    mdrZoneLengthFt: 2.5,
-    trayLengthFt: 2.0,
-  })
-  expect(c1.getMdrPositions()).toBe(15)
-  const totalC = c1.config.upstreamMdrCount * c1.config.mdrZoneLengthFt + c1.config.beltLengthFt + c1.config.downstreamMdrCount * c1.config.mdrZoneLengthFt
-  expect(totalC).toBeCloseTo(81.0)
+  for (const pileId of ['B1', 'C1'] as const) {
+    const pile = createPile(pileId, 8, 86)
+    expect(pile.getMdrPositions()).toBe(18)
+    expect(pile.getBeltPositions()).toBe(20)
+    expect(pile.getPhysicalCapacity()).toBe(38)
+  }
 })

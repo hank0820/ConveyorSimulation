@@ -6,21 +6,23 @@ import SimulationEngine from './simulation/SimulationEngine'
 import { applyOperatingSettingChange, applyPlanningCadenceChange, applyStartScenario } from './operatingSettings'
 import type { SimulationStateWithProgress } from './simulation/types'
 import type { OperatingSettings } from './simulation/types'
+import type { SrsPileId } from './simulation/types'
+import { defaultSrsTargetDrafts, parseSrsTargetDrafts, targetsAreDirty } from './srsTargetDrafts'
 
 const SEGMENTS = [
-  { id: 'A1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 24 },
-  { id: 'B1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 16 },
-  { id: 'C1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'T', maxOccupancy: 16 },
-  { id: 'PRE_T', lengthFt: 20, speedFtPerMin: 120, nextSegmentId: 'T', maxOccupancy: 8 },
+  { id: 'A1', lengthFt: 103.5, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 45 },
+  { id: 'B1', lengthFt: 86, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 38 },
+  { id: 'C1', lengthFt: 86, speedFtPerMin: 120, nextSegmentId: 'T', maxOccupancy: 38 },
+  { id: 'PRE_T', lengthFt: 15, speedFtPerMin: 120, nextSegmentId: 'T', maxOccupancy: 6 },
   { id: 'T', lengthFt: 30, speedFtPerMin: 120, nextSegmentId: 'D', maxOccupancy: 12 },
-  { id: 'D', lengthFt: 235, speedFtPerMin: 120, maxOccupancy: 94 },
-  { id: 'PURGE', lengthFt: 15, speedFtPerMin: 120, nextSegmentId: 'X', maxOccupancy: 6 },
-  { id: 'E', lengthFt: 87.5, speedFtPerMin: 120, nextSegmentId: 'X', maxOccupancy: 35 },
-  { id: 'X', lengthFt: 12.5, speedFtPerMin: 120, maxOccupancy: 5 },
+  { id: 'D', lengthFt: 230, speedFtPerMin: 120, maxOccupancy: 92 },
+  { id: 'PURGE', lengthFt: 30, speedFtPerMin: 120, nextSegmentId: 'X', maxOccupancy: 12 },
+  { id: 'E', lengthFt: 70, speedFtPerMin: 120, nextSegmentId: 'X', maxOccupancy: 28 },
+  { id: 'X', lengthFt: 10, speedFtPerMin: 120, maxOccupancy: 4 },
   { id: 'S', lengthFt: 20, speedFtPerMin: 120, maxOccupancy: 8 },
-  { id: 'A2', lengthFt: 90, speedFtPerMin: 120, maxOccupancy: 36 },
-  { id: 'B2', lengthFt: 72.5, speedFtPerMin: 120, maxOccupancy: 29 },
-  { id: 'C2', lengthFt: 72.5, speedFtPerMin: 120, maxOccupancy: 29 },
+  { id: 'A2', lengthFt: 136, speedFtPerMin: 120, maxOccupancy: 58 },
+  { id: 'B2', lengthFt: 118.5, speedFtPerMin: 120, maxOccupancy: 51 },
+  { id: 'C2', lengthFt: 118.5, speedFtPerMin: 120, maxOccupancy: 51 },
   { id: 'CARTBUILD_A', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
   { id: 'CARTBUILD_B', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
   { id: 'CARTBUILD_C', lengthFt: 75, speedFtPerMin: 120, maxOccupancy: 30 },
@@ -33,6 +35,9 @@ function App() {
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [configurationNotice, setConfigurationNotice] = useState<string | null>(null)
+  const [selectedTargets, setSelectedTargets] = useState(defaultSrsTargetDrafts)
+  const targetValidation = parseSrsTargetDrafts(selectedTargets)
+  const targetsDirty = targetsAreDirty(selectedTargets, state.srsControl.targets)
 
   // animation loop
   useEffect(() => {
@@ -77,6 +82,7 @@ function App() {
     setState(s)
     setPlaying(false)
     setConfigurationNotice(null)
+    setSelectedTargets(defaultSrsTargetDrafts())
   }
 
   function handleOperatingSetting(setting: keyof OperatingSettings, enabled: boolean) {
@@ -88,6 +94,7 @@ function App() {
   }
 
   function handleStartScenario() {
+    if (!targetValidation.targets) return
     applyStartScenario(
       engineRef.current,
       state.operatingSettings,
@@ -95,7 +102,13 @@ function App() {
       () => setPlaying(false),
       setState,
       setConfigurationNotice,
+      targetValidation.targets,
     )
+  }
+
+  function handleTargetChange(pile: SrsPileId, value: string) {
+    setPlaying(false)
+    setSelectedTargets((targets) => ({ ...targets, [pile]: value }))
   }
 
   return (
@@ -123,6 +136,10 @@ function App() {
         onStep={handleStep}
         onReset={handleReset}
         onStartScenario={handleStartScenario}
+        selectedTargets={selectedTargets}
+        targetErrors={targetValidation.errors}
+        targetsDirty={targetsDirty}
+        onTargetChange={handleTargetChange}
         onOperatingSettingChange={handleOperatingSetting}
         onPlanningCadenceChange={handlePlanningCadence}
         configurationNotice={configurationNotice}

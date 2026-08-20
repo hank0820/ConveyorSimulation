@@ -32,7 +32,7 @@ const mission = (missionId: number, source: SourceId, missionType: 'CARTBUILD' |
 const attachedTray = (id: number, source: SourceId, zoneIndex = 0): Tray => ({
   id, currentSegmentId: `${source}1`, positionFt: (zoneIndex + 0.5) * 2.5, status: 'BLOCKED', createdAtSec: 0,
   originSourceId: source, loadState: 'FULL', payloadOrigin: 'CARTBUILD', cartbuildCartonAttached: true,
-  pilePlacement: { pileId: `${source}1`, component: 'MDR_UPSTREAM', zoneIndex },
+  pilePlacement: { pileId: `${source}1`, component: 'MDR_PRE_DETRAYER', zoneIndex },
 })
 
 function expectBalanced(engine: SimulationEngine) {
@@ -43,18 +43,18 @@ function expectBalanced(engine: SimulationEngine) {
 }
 
 describe('Milestone 10A cartbuild capacity reservation', () => {
-  test('time-zero planning reserves 27/26/26 positions', () => {
+  test('time-zero planning reserves 30/30/30 cartbuild positions', () => {
     const engine = new SimulationEngine(SEGMENTS)
-    expect([lane(engine, 'A').pendingMissionReservations, lane(engine, 'B').pendingMissionReservations, lane(engine, 'C').pendingMissionReservations]).toEqual([27, 26, 26])
+    expect([lane(engine, 'A').pendingMissionReservations, lane(engine, 'B').pendingMissionReservations, lane(engine, 'C').pendingMissionReservations]).toEqual([30, 30, 30])
     for (const source of ['A', 'B', 'C'] as SourceId[]) {
       expect(lane(engine, source)).toMatchObject({ positionCapacity: 30, attachedTrayReservations: 0, physicalLaneOccupancy: 0 })
       expect(lane(engine, source).committedPositions).toBe(lane(engine, source).pendingMissionReservations)
     }
   })
 
-  test('time-zero diagnostics report 3/4/4 positions available', () => {
+  test('time-zero diagnostics report fully reserved cartbuild lanes', () => {
     const engine = new SimulationEngine(SEGMENTS)
-    expect([lane(engine, 'A').availablePositions, lane(engine, 'B').availablePositions, lane(engine, 'C').availablePositions]).toEqual([3, 4, 4])
+    expect([lane(engine, 'A').availablePositions, lane(engine, 'B').availablePositions, lane(engine, 'C').availablePositions]).toEqual([0, 0, 0])
   })
 
   test('planning never commits more than 30 positions per cartbuild lane', () => {
@@ -115,7 +115,7 @@ describe('Milestone 10A cartbuild capacity reservation', () => {
   test('EMPTY missions consume SRS capacity but never reserve cartbuild positions', () => {
     const engine = new SimulationEngine(SEGMENTS)
     engine.startScenario({ korberEnabled: true, cartbuildAEnabled: false, cartbuildBEnabled: false, cartbuildCEnabled: false }, 10)
-    expect(engine.getState().missions).toHaveLength(79)
+    expect(engine.getState().missions).toHaveLength(100)
     expect(engine.getState().missions.every(({ missionType }) => missionType === 'EMPTY')).toBe(true)
     for (const source of ['A', 'B', 'C'] as SourceId[]) expect(lane(engine, source)).toMatchObject({ committedPositions: 0, availablePositions: 30 })
   })
@@ -142,8 +142,8 @@ describe('Milestone 10A cartbuild capacity reservation', () => {
       runtime.trays = [
         ...Array.from({ length: 24 }, (_, index) => ({ ...attachedTray(index + 1, 'A', index), loadState: 'EMPTY' as const, payloadOrigin: undefined, cartbuildCartonAttached: undefined })),
         ...Array.from({ length: 6 }, (_, zoneIndex) => ({ id: 100 + zoneIndex, currentSegmentId: 'T', positionFt: 1, status: 'BLOCKED' as const, createdAtSec: 0, originSourceId: 'A' as const, loadState: 'EMPTY' as const, zonePlacement: { conveyorId: 'T' as const, zoneIndex } })),
-        ...Array.from({ length: 73 }, (_, zoneIndex) => ({ id: 200 + zoneIndex, currentSegmentId: 'D', positionFt: 1, status: 'BLOCKED' as const, createdAtSec: 0, originSourceId: 'A' as const, loadState: 'EMPTY' as const, zonePlacement: { conveyorId: 'D' as const, zoneIndex } })),
-        ...Array.from({ length: 36 }, (_, zoneIndex) => ({ id: 300 + zoneIndex, currentSegmentId: 'A2', positionFt: 1, status: 'BLOCKED' as const, createdAtSec: 0, originSourceId: 'A' as const, loadState: 'EMPTY' as const, zonePlacement: { conveyorId: 'A2' as const, zoneIndex } })),
+        ...Array.from({ length: 92 }, (_, zoneIndex) => ({ id: 200 + zoneIndex, currentSegmentId: 'D', positionFt: 1, status: 'BLOCKED' as const, createdAtSec: 0, originSourceId: 'A' as const, loadState: 'EMPTY' as const, zonePlacement: { conveyorId: 'D' as const, zoneIndex } })),
+        ...Array.from({ length: 36 }, (_, zoneIndex) => ({ id: 300 + zoneIndex, currentSegmentId: 'A2', positionFt: 1, status: 'BLOCKED' as const, createdAtSec: 0, originSourceId: 'A' as const, loadState: 'EMPTY' as const, inboundPlacement: zoneIndex < 33 ? { conveyorId: 'A2' as const, component: 'MDR_SORTER_SIDE' as const, zoneIndex } : { conveyorId: 'A2' as const, component: 'SPIRAL' as const, spiralPosFt: 1 + (zoneIndex - 33) * 2 } })),
       ]
       runtime.operatingSettings = missionType === 'CARTBUILD'
         ? { korberEnabled: false, cartbuildAEnabled: true, cartbuildBEnabled: false, cartbuildCEnabled: false }
@@ -172,7 +172,7 @@ describe('Milestone 10A cartbuild capacity reservation', () => {
   test('detraying moves attached reservation to physical lane without changing commitment', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
-    runtime.trays = [attachedTray(1, 'A', 2)]
+    runtime.trays = [attachedTray(1, 'A', 4)]
     runtime.cartons = []
     runtime.missions = []
     runtime.totalTraysCreated = 1
@@ -211,14 +211,14 @@ describe('Milestone 10A cartbuild capacity reservation', () => {
     for (const source of ['A', 'B', 'C'] as SourceId[]) expect(lane(engine, source)).toMatchObject({ committedPositions: 0, availablePositions: 30 })
     expect(engine.getState().srsControl).toMatchObject({ planningCadenceSec: 7, nextPlanningTime: 7 })
     engine.reset()
-    expect([lane(engine, 'A').committedPositions, lane(engine, 'B').committedPositions, lane(engine, 'C').committedPositions]).toEqual([27, 26, 26])
+    expect([lane(engine, 'A').committedPositions, lane(engine, 'B').committedPositions, lane(engine, 'C').committedPositions]).toEqual([30, 30, 30])
     expect(engine.getState().srsControl).toMatchObject({ planningCadenceSec: 10, nextPlanningTime: 10 })
   })
 
   test('Milestone 9 startup allocation and 180-second mission timing remain unchanged', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const state = engine.getState()
-    expect([state.pendingA, state.pendingB, state.pendingC]).toEqual([27, 26, 26])
+    expect([state.pendingA, state.pendingB, state.pendingC]).toEqual([34, 33, 33])
     expect(state.missions.every(({ createdAtSec, readyAtSec, state: missionState }) => readyAtSec - createdAtSec === 180 && missionState === 'RETRIEVING')).toBe(true)
     engine.step(179.9)
     expect(engine.getState().missions.every(({ state: missionState }) => missionState === 'RETRIEVING')).toBe(true)

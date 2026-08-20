@@ -13,9 +13,9 @@ const SEGMENTS = [
   { id: 'E', lengthFt: 87.5, speedFtPerMin: 120, nextSegmentId: 'X', maxOccupancy: 35 },
   { id: 'X', lengthFt: 12.5, speedFtPerMin: 120, maxOccupancy: 5 },
   { id: 'S', lengthFt: 20, speedFtPerMin: 120, maxOccupancy: 8 },
-  { id: 'A2', lengthFt: 90, speedFtPerMin: 120, maxOccupancy: 36 },
-  { id: 'B2', lengthFt: 72.5, speedFtPerMin: 120, maxOccupancy: 29 },
-  { id: 'C2', lengthFt: 72.5, speedFtPerMin: 120, maxOccupancy: 29 },
+  { id: 'A2', lengthFt: 136, speedFtPerMin: 120, maxOccupancy: 58 },
+  { id: 'B2', lengthFt: 118.5, speedFtPerMin: 120, maxOccupancy: 51 },
+  { id: 'C2', lengthFt: 118.5, speedFtPerMin: 120, maxOccupancy: 51 },
 ]
 
 type Runtime = {
@@ -36,22 +36,32 @@ const zoned = (id: number, conveyorId: NonNullable<Tray['zonePlacement']>['conve
   id, currentSegmentId: conveyorId, positionFt: (zoneIndex + 0.5) * 2.5, status: 'BLOCKED', createdAtSec: 0,
   originSourceId: 'A', loadState, zonePlacement: { conveyorId, zoneIndex },
 })
+const inbound = (id: number, conveyorId: ReturnDestination, component: NonNullable<Tray['inboundPlacement']>['component'], position: number, loadState: 'EMPTY' | 'FULL' = 'EMPTY'): Tray => ({
+  id, currentSegmentId: conveyorId, positionFt: position, status: 'BLOCKED', createdAtSec: 0,
+  originSourceId: 'A', loadState,
+  inboundPlacement: component === 'SPIRAL' ? { conveyorId, component, spiralPosFt: position } : { conveyorId, component, zoneIndex: position },
+})
+const routeOf = (tray: Tray) => tray.zonePlacement?.conveyorId ?? tray.inboundPlacement?.conveyorId
 
 const assertPhysical = (state: ReturnType<SimulationEngine['getState']>) => {
   expect(state.materialBalanceError).toBe(0)
   expect(state.createdTrayCount).toBe(state.physicalTrayCount + state.returnSystem.returnedToAsrsCount)
   expect(new Set(state.trays.map((tray) => tray.id)).size).toBe(state.trays.length)
-  const zoneKeys = state.trays.flatMap((tray) => tray.zonePlacement ? [`${tray.zonePlacement.conveyorId}:MDR:${tray.zonePlacement.zoneIndex}`] : [])
+  const zoneKeys = state.trays.flatMap((tray) => tray.zonePlacement
+    ? [`${tray.zonePlacement.conveyorId}:MDR:${tray.zonePlacement.zoneIndex}`]
+    : tray.inboundPlacement && tray.inboundPlacement.component !== 'SPIRAL'
+      ? [`${tray.inboundPlacement?.conveyorId}:${tray.inboundPlacement?.component}:${tray.inboundPlacement?.zoneIndex}`]
+      : [])
   expect(new Set(zoneKeys).size).toBe(zoneKeys.length)
   for (const tray of state.trays) {
-    expect(Number(Boolean(tray.pilePlacement)) + Number(Boolean(tray.zonePlacement)) + Number(Boolean(tray.korberHeld))).toBe(1)
+    expect(Number(Boolean(tray.pilePlacement)) + Number(Boolean(tray.zonePlacement)) + Number(Boolean(tray.inboundPlacement)) + Number(Boolean(tray.korberHeld))).toBe(1)
   }
 }
 
 describe('Milestone 8 return conveyor topology and lifecycle', () => {
   test('declares the required return geometry and resets empty with cursor A2', () => {
     const engine = createEngine()
-    const expected = { PURGE: [15, 6], E: [87.5, 35], X: [12.5, 5], S: [20, 8], A2: [90, 36], B2: [72.5, 29], C2: [72.5, 29] }
+    const expected = { PURGE: [30, 12], E: [70, 28], X: [10, 4], S: [20, 8], A2: [136, 58], B2: [118.5, 51], C2: [118.5, 51] }
     const state = engine.getState()
     for (const [id, [lengthFt, zones]] of Object.entries(expected)) {
       const segment = state.segments.find((candidate) => candidate.id === id)!
@@ -69,7 +79,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
   test('Körber preserves ID, transforms EMPTY to FULL, holds one blocked tray, and restarts without catch-up', () => {
     const engine = createEngine()
     const runtime = runtimeOf(engine)
-    runtime.trays = [zoned(1, 'D', 93), zoned(40, 'D', 92), ...Array.from({ length: 35 }, (_, zone) => zoned(zone + 2, 'E', zone))]
+    runtime.trays = [zoned(1, 'D', 91), zoned(40, 'D', 90), ...Array.from({ length: 28 }, (_, zone) => zoned(zone + 2, 'E', zone))]
     runtime.missions = []
     runtime.totalTraysCreated = runtime.trays.length
     runtime.consumedCount = 0
@@ -81,7 +91,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     expect(state.trays.find(({ id }) => id === 1)).toMatchObject({ id: 1, loadState: 'FULL', korberHeld: true })
     expect(state.trays.find(({ id }) => id === 1)?.zonePlacement).toBeUndefined()
     expect(state.returnSystem.returnedHistory.some(({ trayId }) => trayId === 1)).toBe(false)
-    expect(state.createdTrayCount).toBe(37)
+    expect(state.createdTrayCount).toBe(30)
     engine.step(5)
     state = engine.getState()
     expect(state.returnSystem.korberProcessedCount).toBe(1)
@@ -141,12 +151,12 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
   test('E has strict eligible priority into X and PURGE proceeds when E is not ready', () => {
     const engine = createEngine()
     const runtime = runtimeOf(engine)
-    runtime.trays = [zoned(1, 'E', 34, 'FULL'), zoned(2, 'PURGE', 5)]
+    runtime.trays = [zoned(1, 'E', 27, 'FULL'), zoned(2, 'PURGE', 11)]
     runtime.totalTraysCreated = 2
     runtime.processReturnBoundaries()
     expect(runtime.trays.find(({ id }) => id === 1)?.zonePlacement).toEqual({ conveyorId: 'X', zoneIndex: 0 })
     expect(runtime.trays.find(({ id }) => id === 2)?.zonePlacement?.conveyorId).toBe('PURGE')
-    runtime.trays = [zoned(2, 'PURGE', 5), zoned(3, 'E', 33, 'FULL')]
+    runtime.trays = [zoned(2, 'PURGE', 11), zoned(3, 'E', 26, 'FULL')]
     runtime.totalTraysCreated = 2
     runtime.processReturnBoundaries()
     expect(runtime.trays.find(({ id }) => id === 2)?.zonePlacement).toEqual({ conveyorId: 'X', zoneIndex: 0 })
@@ -159,10 +169,10 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     runtime.totalTraysCreated = 3
     const routed: Array<[number, ReturnDestination, string]> = []
     for (let id = 1; id <= 3; id++) {
-      const item = zoned(id, 'X', 4, id % 2 ? 'EMPTY' : 'FULL')
+      const item = zoned(id, 'X', 3, id % 2 ? 'EMPTY' : 'FULL')
       runtime.trays.push(item)
       runtime.processReturnBoundaries()
-      routed.push([id, item.returnDestination!, item.zonePlacement!.conveyorId])
+      routed.push([id, item.returnDestination!, routeOf(item)!])
       runtime.trays.splice(runtime.trays.indexOf(item), 1)
     }
     expect(routed).toEqual([[1, 'A2', 'S'], [2, 'B2', 'S'], [3, 'C2', 'C2']])
@@ -170,7 +180,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
 
     const head = zoned(10, 'S', 7); head.returnDestination = 'A2'
     const follower = zoned(11, 'S', 6); follower.returnDestination = 'B2'
-    runtime.trays = [head, follower, zoned(12, 'A2', 0)]
+    runtime.trays = [head, follower, inbound(12, 'A2', 'MDR_SORTER_SIDE', 0)]
     runtime.processReturnBoundaries()
     expect(head.zonePlacement?.conveyorId).toBe('S')
     expect(follower.zonePlacement?.conveyorId).toBe('S')
@@ -183,26 +193,26 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     runtime.totalTraysCreated = 9
     const trace: Array<{ id: number; load: string; destination: ReturnDestination; before: ReturnDestination; after: ReturnDestination; route: string }> = []
     for (let id = 1; id <= 9; id++) {
-      const item = zoned(id, 'X', 4, id % 2 ? 'EMPTY' : 'FULL')
+      const item = zoned(id, 'X', 3, id % 2 ? 'EMPTY' : 'FULL')
       runtime.trays.push(item)
       const before = runtime.sorterCursor
       runtime.processReturnBoundaries()
-      trace.push({ id, load: item.loadState!, destination: item.returnDestination!, before, after: runtime.sorterCursor, route: item.zonePlacement!.conveyorId })
+      trace.push({ id, load: item.loadState!, destination: item.returnDestination!, before, after: runtime.sorterCursor, route: routeOf(item)! })
       runtime.trays.splice(runtime.trays.indexOf(item), 1)
     }
     expect(trace.map(({ destination }) => destination)).toEqual(['A2', 'B2', 'C2', 'A2', 'B2', 'C2', 'A2', 'B2', 'C2'])
     expect(trace.map(({ route }) => route)).toEqual(['S', 'S', 'C2', 'S', 'S', 'C2', 'S', 'S', 'C2'])
     expect(trace.every(({ before, after, destination }) => before === destination && after === (destination === 'A2' ? 'B2' : destination === 'B2' ? 'C2' : 'A2'))).toBe(true)
 
-    const aBlocked = zoned(20, 'A2', 0)
-    const skipped = zoned(21, 'X', 4)
+    const aBlocked = inbound(20, 'A2', 'MDR_SORTER_SIDE', 0)
+    const skipped = zoned(21, 'X', 3)
     runtime.trays = [aBlocked, skipped]
     runtime.sorterCursor = 'A2'
     runtime.processReturnBoundaries()
     expect(skipped.returnDestination).toBe('B2')
     expect(runtime.sorterCursor).toBe('C2')
 
-    const frozen = zoned(22, 'X', 4); frozen.returnDestination = 'A2'
+    const frozen = zoned(22, 'X', 3); frozen.returnDestination = 'A2'
     const sBlocker = zoned(23, 'S', 0)
     runtime.trays = [frozen, sBlocker]
     runtime.sorterCursor = 'C2'
@@ -220,12 +230,12 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
   test('independent exchanger sinks accept only final-zone trays at least eight seconds apart and retain history', () => {
     const engine = createEngine()
     const runtime = runtimeOf(engine)
-    runtime.trays = [zoned(1, 'A2', 35, 'FULL'), zoned(2, 'B2', 28), zoned(3, 'C2', 27)]
+    runtime.trays = [inbound(1, 'A2', 'MDR_EXCHANGER_SIDE', 4, 'FULL'), inbound(2, 'B2', 'MDR_EXCHANGER_SIDE', 4), inbound(3, 'C2', 'MDR_EXCHANGER_SIDE', 3)]
     runtime.missions = []
     runtime.totalTraysCreated = 3
     runtime.processExchangerSinks()
     expect(runtime.trays.map(({ id }) => id)).toEqual([3])
-    runtime.trays.push(zoned(4, 'A2', 35))
+    runtime.trays.push(inbound(4, 'A2', 'MDR_EXCHANGER_SIDE', 4))
     runtime.totalTraysCreated += 1
     runtime.timeSec = 7.9
     runtime.processExchangerSinks()
@@ -243,15 +253,15 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
   })
 
   test('continuously supplied exchanger clocks independently sustain 450 trays/hour without drift or catch-up', () => {
-    for (const [destination, finalZone] of [['A2', 35], ['B2', 28], ['C2', 28]] as const) {
+    for (const destination of ['A2', 'B2', 'C2'] as const) {
       const engine = createEngine()
       const runtime = runtimeOf(engine)
       runtime.trays = []
       runtime.totalTraysCreated = 0
       let nextId = 1
       for (let tick = 0; tick <= 36_000; tick++) {
-        const occupied = runtime.trays.some((tray) => tray.zonePlacement?.conveyorId === destination && tray.zonePlacement.zoneIndex === finalZone)
-        if (!occupied) { runtime.trays.push(zoned(nextId++, destination, finalZone)); runtime.totalTraysCreated += 1 }
+        const occupied = runtime.trays.some((tray) => tray.inboundPlacement?.conveyorId === destination && tray.inboundPlacement.component === 'MDR_EXCHANGER_SIDE' && tray.inboundPlacement.zoneIndex === 4)
+        if (!occupied) { runtime.trays.push(inbound(nextId++, destination, 'MDR_EXCHANGER_SIDE', 4)); runtime.totalTraysCreated += 1 }
         runtime.timeSec = tick / 10
         runtime.processExchangerSinks()
       }
@@ -263,14 +273,14 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
 
     const starved = createEngine()
     const runtime = runtimeOf(starved)
-    runtime.trays = [zoned(1, 'A2', 35)]
+    runtime.trays = [inbound(1, 'A2', 'MDR_EXCHANGER_SIDE', 4)]
     runtime.totalTraysCreated = 1
     runtime.timeSec = 0
     runtime.processExchangerSinks()
     runtime.timeSec = 100
-    runtime.trays.push(zoned(2, 'A2', 35)); runtime.totalTraysCreated += 1
+    runtime.trays.push(inbound(2, 'A2', 'MDR_EXCHANGER_SIDE', 4)); runtime.totalTraysCreated += 1
     runtime.processExchangerSinks()
-    runtime.trays.push(zoned(3, 'A2', 35)); runtime.totalTraysCreated += 1
+    runtime.trays.push(inbound(3, 'A2', 'MDR_EXCHANGER_SIDE', 4)); runtime.totalTraysCreated += 1
     runtime.processExchangerSinks()
     expect(starved.getState().returnSystem.exchangerAcceptanceTimes.A2).toEqual([0, 100])
     runtime.timeSec = 108
@@ -282,7 +292,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     const engine = createEngine()
     const runtime = runtimeOf(engine)
     runtime.trays = [
-      ...Array.from({ length: 94 }, (_, zone) => zoned(zone + 1, 'D', zone)),
+      ...Array.from({ length: 92 }, (_, zone) => zoned(zone + 1, 'D', zone)),
       ...Array.from({ length: 12 }, (_, zone) => zoned(zone + 95, 'T', zone)),
     ]
     runtime.missions = []
@@ -290,10 +300,10 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     runtime.nextConsumptionTime = 3600 / 1050
     let prior = engine.getState()
     for (let tick = 0; tick < 5000; tick++) {
-      const frozen = prior.trays.map((tray) => [tray.id, tray.zonePlacement?.zoneIndex, tray.pilePlacement?.beltPosFt])
+      const frozen = prior.trays.map((tray) => [tray.id, tray.zonePlacement?.zoneIndex, tray.pilePlacement?.beltPosFt, tray.inboundPlacement?.spiralPosFt])
       engine.step(0.1)
       const state = engine.getState()
-      expect(prior.trays.map((tray) => [tray.id, tray.zonePlacement?.zoneIndex, tray.pilePlacement?.beltPosFt])).toEqual(frozen)
+      expect(prior.trays.map((tray) => [tray.id, tray.zonePlacement?.zoneIndex, tray.pilePlacement?.beltPosFt, tray.inboundPlacement?.spiralPosFt])).toEqual(frozen)
       assertPhysical(state)
       prior = state
     }

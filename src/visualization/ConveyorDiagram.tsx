@@ -13,11 +13,16 @@ import type {
 
 interface Props { segments: ConveyorSegmentConfig[]; trays: Tray[]; state: SimulationStateWithProgress }
 type Orientation = 'horizontal' | 'vertical'
-type Region = 'MDR' | 'MDR_UPSTREAM' | 'BELT' | 'MDR_DOWNSTREAM'
+type Region = 'MDR' | 'MDR_PRE_DETRAYER' | 'MDR_POST_DETRAYER' | 'BELT' | 'MDR_DOWNSTREAM' | 'MDR_SORTER_SIDE' | 'SPIRAL' | 'MDR_EXCHANGER_SIDE'
 interface LayoutRect { x: number; y: number; w: number; h: number; conveyorId: string; region: Region; orientation: Orientation; zoneIndex?: number; reverse?: boolean }
+interface SectionLabel { id: string; text: string; x: number; y: number; anchor: string; rotate: boolean; bounds?: { x: number; y: number; width: number; height: number } }
 
 const VIEWBOX = { width: 1600, height: 1040 }
 const ZONE_THICKNESS = 24
+const SPIRAL_LENGTH_FT = 41
+const SPIRAL_TURNS = 4
+const OPERATOR_LABEL_FONT_SIZE = 7.5
+const OPERATOR_LABEL_WIDTH = 45
 const COLORS = {
   canvas: '#f8fafb', grid: '#e6ebef', conveyor: '#dce2e6', conveyorEdge: '#647581', belt: '#a8bcc8', beltEdge: '#435f70', text: '#22333e', muted: '#627480', connector: '#526a78',
   empty: '#2b78a0', full: '#e57b25', held: '#9b51a8', purge: '#f4c542', A2: '#b74747', B2: '#7254a5', C2: '#34815c',
@@ -153,22 +158,35 @@ const robotPosition = (robot: VisualRobot, state: SimulationStateWithProgress) =
 }
 
 const ZONED_SPECS: Array<{ id: ZonedConveyorId; count: number; x: number; y: number; length: number; orientation: Orientation; reverse?: boolean; label: string }> = [
-  { id: 'PRE_T', count: 8, x: 450, y: 90, length: 160, orientation: 'horizontal', label: 'PRE_T · 8 zones' },
+  { id: 'PRE_T', count: 6, x: 450, y: 90, length: 160, orientation: 'horizontal', label: 'PRE_T · 6 zones' },
   { id: 'T', count: 12, x: 650, y: 90, length: 180, orientation: 'horizontal', label: 'T · 12 zones' },
-  { id: 'D', count: 94, x: 850, y: 90, length: 650, orientation: 'horizontal', label: 'D · 94 zones' },
-  { id: 'PURGE', count: 6, x: 806, y: 170, length: 150, orientation: 'vertical', label: 'PURGE · 6 zones' },
-  { id: 'E', count: 35, x: 850, y: 330, length: 610, orientation: 'horizontal', reverse: true, label: 'E · 35 zones' },
-  { id: 'X', count: 5, x: 794, y: 370, length: 120, orientation: 'vertical', label: 'X · 5 zones' },
+  { id: 'D', count: 92, x: 850, y: 90, length: 650, orientation: 'horizontal', label: 'D · 92 zones' },
+  { id: 'PURGE', count: 12, x: 806, y: 170, length: 150, orientation: 'vertical', label: 'PURGE · 12 zones' },
+  { id: 'E', count: 28, x: 850, y: 330, length: 610, orientation: 'horizontal', reverse: true, label: 'E · 28 zones' },
+  { id: 'X', count: 4, x: 794, y: 370, length: 120, orientation: 'vertical', label: 'X · 4 zones' },
   { id: 'S', count: 8, x: 488, y: 540, length: 74, orientation: 'horizontal', reverse: true, label: 'S · 8 zones' },
-  { id: 'A2', count: 36, x: 288, y: 590, length: 205, orientation: 'vertical', label: 'A2 · 36 zones' },
-  { id: 'B2', count: 29, x: 418, y: 590, length: 205, orientation: 'vertical', label: 'B2 · 29 zones' },
-  { id: 'C2', count: 29, x: 608, y: 590, length: 205, orientation: 'vertical', label: 'C2 · 29 zones' },
 ]
 
+const INBOUND_COMPOSITES = [
+  { id: 'A2', x: 300, y: 590, sorter: 33, capacity: 58 },
+  { id: 'B2', x: 430, y: 590, sorter: 26, capacity: 51 },
+  { id: 'C2', x: 620, y: 590, sorter: 26, capacity: 51 },
+] as const
+
+const spiralPoint = (layout: LayoutRect, progress: number) => ({
+  x: layout.x + layout.w / 2 + Math.sin(progress * SPIRAL_TURNS * Math.PI * 2) * (layout.w / 2 - 3),
+  y: layout.y + progress * layout.h,
+})
+
+const spiralPath = (layout: LayoutRect) => Array.from({ length: 65 }, (_, index) => {
+  const point = spiralPoint(layout, index / 64)
+  return `${index === 0 ? 'M' : 'L'}${point.x.toFixed(2)} ${point.y.toFixed(2)}`
+}).join(' ')
+
 const PILES = [
-  { id: 'A1', x: 300, upstream: 8, beltFt: 23.5, beltHeight: 70, downstream: 15, label: 'A1 · 24' },
-  { id: 'B1', x: 430, upstream: 8, beltFt: 43.5, beltHeight: 120, downstream: 7, label: 'B1 · 16' },
-  { id: 'C1', x: 620, upstream: 8, beltFt: 43.5, beltHeight: 120, downstream: 7, label: 'C1 · 16' },
+  { id: 'A1', x: 300, pre: 5, post: 5, beltFt: 41, beltHeight: 100, downstream: 15, label: 'A1 · 45 positions' },
+  { id: 'B1', x: 430, pre: 5, post: 5, beltFt: 41, beltHeight: 100, downstream: 8, label: 'B1 · 38 positions' },
+  { id: 'C1', x: 620, pre: 5, post: 5, beltFt: 41, beltHeight: 100, downstream: 8, label: 'C1 · 38 positions' },
 ] as const
 
 const CARTBUILD_SPECS: Array<{ id: CartbuildLaneId; source: 'A' | 'B' | 'C'; x: number; y: number; length: number; label: string }> = [
@@ -177,14 +195,20 @@ const CARTBUILD_SPECS: Array<{ id: CartbuildLaneId; source: 'A' | 'B' | 'C'; x: 
   { id: 'CARTBUILD_C', source: 'C', x: 655, y: 235, length: 225, label: 'CARTBUILD C · 30 zones' },
 ]
 
+const OPERATOR_LAYOUT: Record<SourceId, { x: number; y: number; width: number }> = {
+  A: { x: 300, y: 180, width: 70 },
+  B: { x: 430, y: 180, width: 70 },
+  C: { x: 620, y: 180, width: 70 },
+}
+
 const Connector = ({ id, from, to, d }: { id: string; from: string; to: string; d: string }) => (
-  <path data-connector-id={id} data-flow-from={from} data-flow-to={to} d={d} fill="none" stroke={COLORS.connector} strokeWidth={3} strokeLinejoin="round" markerEnd="url(#flow-arrow)" />
+  <path data-connector-id={id} data-flow-from={from} data-flow-to={to} data-flow-direction={`${from}-to-${to}`} d={d} fill="none" stroke={COLORS.connector} strokeWidth={3} strokeLinejoin="round" markerEnd="url(#flow-arrow)" />
 )
 
-const Equipment = ({ id, x, y, width, children }: { id: string; x: number; y: number; width: number; children: ReactNode }) => (
+const Equipment = ({ id, x, y, width, labelFontSize = 11, labelWidth, children }: { id: string; x: number; y: number; width: number; labelFontSize?: number; labelWidth?: number; children: ReactNode }) => (
   <g data-equipment-id={id} data-bounds-x={x} data-bounds-y={y} data-bounds-width={width} data-bounds-height={34}>
     <rect x={x} y={y} width={width} height={34} rx={4} fill="#e6edf2" stroke="#5d7280" strokeWidth={2} />
-    <text x={x + width / 2} y={y + 21} textAnchor="middle" fontSize={11} fontWeight={700} fill={COLORS.text}>{children}</text>
+    <text data-equipment-label={id} data-label-bounds-x={labelWidth === undefined ? undefined : x + (width - labelWidth) / 2} data-label-bounds-y={labelWidth === undefined ? undefined : y + 21 - labelFontSize} data-label-bounds-width={labelWidth} data-label-bounds-height={labelWidth === undefined ? undefined : labelFontSize} x={x + width / 2} y={y + 21} textAnchor="middle" fontSize={labelFontSize} fontWeight={700} fill={COLORS.text}>{children}</text>
   </g>
 )
 
@@ -215,12 +239,16 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
 
   for (const pile of PILES) {
     const bottom = 500
-    const upstreamZoneHeight = 10
+    const mdrZoneHeight = 10
     const downstreamZoneHeight = 8
-    for (let index = 0; index < pile.upstream; index++) {
-      layouts.set(`${pile.id}:MDR_UPSTREAM:${index}`, { x: pile.x - ZONE_THICKNESS / 2, y: bottom - (index + 1) * upstreamZoneHeight, w: ZONE_THICKNESS, h: upstreamZoneHeight, conveyorId: pile.id, region: 'MDR_UPSTREAM', orientation: 'vertical', zoneIndex: index })
+    for (let index = 0; index < pile.pre; index++) {
+      layouts.set(`${pile.id}:MDR_PRE_DETRAYER:${index}`, { x: pile.x - ZONE_THICKNESS / 2, y: bottom - (index + 1) * mdrZoneHeight, w: ZONE_THICKNESS, h: mdrZoneHeight, conveyorId: pile.id, region: 'MDR_PRE_DETRAYER', orientation: 'vertical', zoneIndex: index })
     }
-    const beltBottom = bottom - pile.upstream * upstreamZoneHeight
+    const postBottom = bottom - pile.pre * mdrZoneHeight
+    for (let index = 0; index < pile.post; index++) {
+      layouts.set(`${pile.id}:MDR_POST_DETRAYER:${index}`, { x: pile.x - ZONE_THICKNESS / 2, y: postBottom - (index + 1) * mdrZoneHeight, w: ZONE_THICKNESS, h: mdrZoneHeight, conveyorId: pile.id, region: 'MDR_POST_DETRAYER', orientation: 'vertical', zoneIndex: index })
+    }
+    const beltBottom = postBottom - pile.post * mdrZoneHeight
     layouts.set(`${pile.id}:BELT`, { x: pile.x - ZONE_THICKNESS / 2, y: beltBottom - pile.beltHeight, w: ZONE_THICKNESS, h: pile.beltHeight, conveyorId: pile.id, region: 'BELT', orientation: 'vertical' })
     const downstreamBottom = beltBottom - pile.beltHeight
     for (let index = 0; index < pile.downstream; index++) {
@@ -228,13 +256,34 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
     }
   }
 
-  const trayPositions = trays.map((tray) => {
+  for (const composite of INBOUND_COMPOSITES) {
+    if (!segments.some((segment) => segment.id === composite.id)) continue
+    const sorterHeight = 120
+    const spiralHeight = 60
+    const exchangerHeight = 25
+    for (let index = 0; index < composite.sorter; index++) {
+      layouts.set(`${composite.id}:MDR_SORTER_SIDE:${index}`, { x: composite.x - ZONE_THICKNESS / 2, y: composite.y + index * sorterHeight / composite.sorter, w: ZONE_THICKNESS, h: sorterHeight / composite.sorter, conveyorId: composite.id, region: 'MDR_SORTER_SIDE', orientation: 'vertical', zoneIndex: index })
+    }
+    layouts.set(`${composite.id}:SPIRAL`, { x: composite.x - 27, y: composite.y + sorterHeight, w: 54, h: spiralHeight, conveyorId: composite.id, region: 'SPIRAL', orientation: 'vertical' })
+    for (let index = 0; index < 5; index++) {
+      layouts.set(`${composite.id}:MDR_EXCHANGER_SIDE:${index}`, { x: composite.x - ZONE_THICKNESS / 2, y: composite.y + sorterHeight + spiralHeight + index * exchangerHeight / 5, w: ZONE_THICKNESS, h: exchangerHeight / 5, conveyorId: composite.id, region: 'MDR_EXCHANGER_SIDE', orientation: 'vertical', zoneIndex: index })
+    }
+  }
+
+  const trayPositions: Array<{ tray: Tray; x: number; y: number; width: number; orientation: Orientation; segment: string; zoneIndex?: number; spiralPositionFt?: number }> = trays.map((tray) => {
     if (tray.korberHeld) return { tray, x: 1540, y: 140, width: 18, orientation: 'horizontal' as Orientation, segment: 'KORBER' }
     let layout: LayoutRect | undefined
-    if (tray.zonePlacement) layout = layouts.get(`${tray.zonePlacement.conveyorId}:MDR:${tray.zonePlacement.zoneIndex}`)
+    if (tray.inboundPlacement?.component === 'SPIRAL') layout = layouts.get(`${tray.inboundPlacement.conveyorId}:SPIRAL`)
+    else if (tray.inboundPlacement) layout = layouts.get(`${tray.inboundPlacement.conveyorId}:${tray.inboundPlacement.component}:${tray.inboundPlacement.zoneIndex ?? 0}`)
+    else if (tray.zonePlacement) layout = layouts.get(`${tray.zonePlacement.conveyorId}:MDR:${tray.zonePlacement.zoneIndex}`)
     else if (tray.pilePlacement?.component === 'BELT') layout = layouts.get(`${tray.pilePlacement.pileId}:BELT`)
     else if (tray.pilePlacement) layout = layouts.get(`${tray.pilePlacement.pileId}:${tray.pilePlacement.component}:${tray.pilePlacement.zoneIndex ?? 0}`)
     if (!layout) return { tray, x: 28, y: 810, width: 12, orientation: 'horizontal' as Orientation, segment: tray.currentSegmentId }
+    if (tray.inboundPlacement?.component === 'SPIRAL') {
+      const progress = Math.max(0, Math.min(1, (tray.inboundPlacement.spiralPosFt ?? 1) / SPIRAL_LENGTH_FT))
+      const point = spiralPoint(layout, progress)
+      return { tray, x: point.x, y: point.y, width: 14, orientation: 'vertical' as Orientation, segment: tray.inboundPlacement.conveyorId, spiralPositionFt: tray.inboundPlacement.spiralPosFt }
+    }
     if (tray.pilePlacement?.component === 'BELT') {
       const pile = PILES.find(({ id }) => id === tray.pilePlacement?.pileId)!
       const progress = Math.max(0, Math.min(1, (tray.pilePlacement.beltPosFt ?? 0) / pile.beltFt))
@@ -243,9 +292,10 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
     return { tray, x: layout.x + layout.w / 2, y: layout.y + layout.h / 2, width: layout.orientation === 'horizontal' ? layout.w : layout.h, orientation: layout.orientation, segment: layout.conveyorId, zoneIndex: layout.zoneIndex }
   })
 
-  const sectionLabels = [
+  const sectionLabels: SectionLabel[] = [
     ...ZONED_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => ({ id: spec.id, text: spec.label, x: spec.orientation === 'horizontal' ? spec.x + spec.length / 2 : spec.x + 22, y: spec.orientation === 'horizontal' ? spec.y - 24 : spec.y + spec.length / 2, anchor: spec.orientation === 'horizontal' ? 'middle' : 'start', rotate: spec.orientation === 'vertical' })),
     ...PILES.map((pile) => ({ id: pile.id, text: pile.label, x: pile.x - 25, y: 350, anchor: 'middle', rotate: true })),
+    ...INBOUND_COMPOSITES.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => ({ id: spec.id, text: `${spec.id} · ${spec.capacity} positions`, x: spec.x + 22, y: 645, anchor: 'middle', rotate: true, bounds: { x: spec.x + 14, y: 590, width: 16, height: 110 } })),
   ]
   const visualRobots = activeVisualRobots(state)
   const individualRobots = visualRobots.filter((robot) => isIndividuallyRendered(robot, state))
@@ -267,7 +317,7 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
       <rect width={VIEWBOX.width} height={VIEWBOX.height} fill="url(#schematic-grid)" opacity={0.7} />
 
       <g aria-label="Implemented routing connectors">
-        <Connector id="A1-to-PRE_T" from="A1" to="PRE_T" d="M300 218 L300 160 L430 160 L430 90 L450 90" />
+        <Connector id="A1-to-PRE_T" from="A1" to="PRE_T" d="M300 180 L300 160 L430 160 L430 90 L450 90" />
         <Connector id="B1-to-PRE_T" from="B1" to="PRE_T" d="M430 232 L430 90 L450 90" />
         <Connector id="PRE_T-to-T" from="PRE_T" to="T" d="M610 90 L650 90" />
         <Connector id="C1-to-T" from="C1" to="T" d="M620 232 L620 150 L640 150 L640 90 L650 90" />
@@ -344,10 +394,12 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
 
       <g aria-label="Conveyor zones" data-conveyor-bounds="S" data-bounds-x="480" data-bounds-y="504" data-bounds-width="90" data-bounds-height="48">
         {Array.from(layouts.entries()).map(([key, layout]) => {
-          const zoneId = layout.zoneIndex === undefined ? undefined : key
+          const zoneId = layout.zoneIndex === undefined && layout.region !== 'SPIRAL' ? undefined : key
           const fill = layout.region === 'BELT' ? COLORS.belt : layout.region === 'MDR' ? COLORS.conveyor : '#d2dde2'
-          return <g key={key} data-zone-id={zoneId} data-conveyor-id={layout.conveyorId} data-region={layout.region} data-zone-index={layout.zoneIndex}>
-            <rect x={layout.x} y={layout.y} width={layout.w} height={layout.h} fill={fill} stroke={layout.region === 'BELT' ? COLORS.beltEdge : COLORS.conveyorEdge} strokeWidth={layout.region === 'BELT' ? 2 : 1} />
+          return <g key={key} data-zone-id={zoneId} data-section-id={key} data-segment-id={layout.conveyorId} data-conveyor-id={layout.conveyorId} data-region={layout.region} data-component-type={layout.region === 'SPIRAL' ? 'SCHEMATIC_COIL' : layout.region === 'BELT' ? 'STRAIGHT_BELT' : 'MDR_ZONE'} data-zone-index={layout.zoneIndex} data-exchanger-id={layout.conveyorId.endsWith('2') ? layout.conveyorId.slice(0, 1) : undefined} data-flow-direction="FORWARD">
+            {layout.region === 'SPIRAL'
+              ? <path data-spiral-path-id={`${layout.conveyorId}_SPIRAL_PATH`} data-exchanger-id={layout.conveyorId.slice(0, 1)} d={spiralPath(layout)} fill="none" stroke={COLORS.beltEdge} strokeWidth={5} strokeLinecap="round" strokeLinejoin="round" />
+              : <rect x={layout.x} y={layout.y} width={layout.w} height={layout.h} fill={fill} stroke={layout.region === 'BELT' ? COLORS.beltEdge : COLORS.conveyorEdge} strokeWidth={layout.region === 'BELT' ? 2 : 1} />}
           </g>
         })}
         {Array.from(cartonLayouts.entries()).map(([key, layout]) => <g key={key} data-zone-id={key} data-cartbuild-lane={layout.conveyorId} data-conveyor-id={layout.conveyorId} data-region="MDR" data-zone-index={layout.zoneIndex}>
@@ -355,9 +407,25 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
         </g>)}
       </g>
 
+      <g aria-label="Deterministic display bounds">
+        {PILES.map((pile) => <g key={pile.id} data-conveyor-display-bounds={pile.id} data-bounds-x={pile.x - 12} data-bounds-y={500 - 5 * 10 - 5 * 10 - pile.beltHeight - pile.downstream * 8} data-bounds-width={24} data-bounds-height={5 * 10 + 5 * 10 + pile.beltHeight + pile.downstream * 8} />)}
+        {INBOUND_COMPOSITES.map((spec) => <g key={spec.id} data-spiral-display-bounds={spec.id} data-bounds-x={spec.x - 27} data-bounds-y={710} data-bounds-width={54} data-bounds-height={60} />)}
+      </g>
+
       <g aria-label="Section labels">
-        {sectionLabels.map((label) => <text key={label.id} data-section-label={label.id} x={label.x} y={label.y} textAnchor={label.anchor as 'middle' | 'start'} transform={label.rotate ? `rotate(-90 ${label.x} ${label.y})` : undefined} fill={COLORS.text} fontSize={12} fontWeight={700}>{label.text}</text>)}
+        {sectionLabels.map((label) => <text key={label.id} data-section-label={label.id} data-bounds-x={label.bounds?.x} data-bounds-y={label.bounds?.y} data-bounds-width={label.bounds?.width} data-bounds-height={label.bounds?.height} x={label.x} y={label.y} textAnchor={label.anchor as 'middle' | 'start'} transform={label.rotate ? `rotate(-90 ${label.x} ${label.y})` : undefined} fill={COLORS.text} fontSize={12} fontWeight={700}>{label.text}</text>)}
         {CARTBUILD_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => <text key={spec.id} data-section-label={spec.id} x={spec.x + 19} y={spec.y + spec.length / 2} textAnchor="middle" transform={`rotate(-90 ${spec.x + 19} ${spec.y + spec.length / 2})`} fill={COLORS.text} fontSize={9} fontWeight={700}>{spec.label}</text>)}
+        {PILES.map((pile) => <text key={`${pile.id}-belt`} data-component-label={`${pile.id}:BELT`} x={pile.x + 18} y={325} textAnchor="middle" transform={`rotate(-90 ${pile.x + 18} 325)`} fill={COLORS.beltEdge} fontSize={8} fontWeight={700}>41 ft BELT</text>)}
+        {PILES.flatMap((pile) => [
+          <text key={`${pile.id}-pre`} data-component-label={`${pile.id}:MDR_PRE_DETRAYER`} x={pile.x + 17} y={475} textAnchor="middle" transform={`rotate(-90 ${pile.x + 17} 475)`} fill={COLORS.muted} fontSize={6}>5 MDR PRE</text>,
+          <text key={`${pile.id}-post`} data-component-label={`${pile.id}:MDR_POST_DETRAYER`} x={pile.x + 17} y={425} textAnchor="middle" transform={`rotate(-90 ${pile.x + 17} 425)`} fill={COLORS.muted} fontSize={6}>5 MDR POST</text>,
+          <text key={`${pile.id}-downstream`} data-component-label={`${pile.id}:MDR_DOWNSTREAM`} x={pile.x + 17} y={245} textAnchor="middle" transform={`rotate(-90 ${pile.x + 17} 245)`} fill={COLORS.muted} fontSize={6}>{`${pile.downstream} MDR DOWNSTREAM`}</text>,
+        ])}
+        {INBOUND_COMPOSITES.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => <text key={`${spec.id}-spiral`} data-component-label={`${spec.id}:SPIRAL`} x={spec.x + 34} y={742} textAnchor="middle" transform={`rotate(-90 ${spec.x + 34} 742)`} fill={COLORS.beltEdge} fontSize={8} fontWeight={700}>41 ft SPIRAL</text>)}
+        {INBOUND_COMPOSITES.filter((spec) => segments.some((segment) => segment.id === spec.id)).flatMap((spec) => [
+          <text key={`${spec.id}-sorter`} data-component-label={`${spec.id}:MDR_SORTER_SIDE`} x={spec.x - 17} y={650} textAnchor="middle" transform={`rotate(-90 ${spec.x - 17} 650)`} fill={COLORS.muted} fontSize={6}>{`${spec.sorter} MDR SORTER SIDE`}</text>,
+          <text key={`${spec.id}-exchanger`} data-component-label={`${spec.id}:MDR_EXCHANGER_SIDE`} x={spec.x - 17} y={782} textAnchor="middle" transform={`rotate(-90 ${spec.x - 17} 782)`} fill={COLORS.muted} fontSize={6}>5 MDR EXCHANGER SIDE</text>,
+        ])}
         <text x={805} y={516} textAnchor="middle" fill={COLORS.text} fontSize={11} fontWeight={700}>RETURN SORTER</text>
         <text x={1518} y={57} fill={COLORS.text} fontSize={10}>FLOW →</text>
       </g>
@@ -366,27 +434,27 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
       <Equipment id="A_EXCHANGER" x={250} y={810} width={100}>A EXCHANGER</Equipment>
       <Equipment id="B_EXCHANGER" x={380} y={810} width={100}>B EXCHANGER</Equipment>
       <Equipment id="C_EXCHANGER" x={570} y={810} width={100}>C EXCHANGER</Equipment>
-      {CARTBUILD_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => <Equipment key={spec.source} id={`OPERATOR_${spec.source}`} x={spec.x - 35} y={180} width={70}>{`OPERATOR ${spec.source}`}</Equipment>)}
+      {CARTBUILD_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => <Equipment key={spec.source} id={`OPERATOR_${spec.source}`} {...OPERATOR_LAYOUT[spec.source]} labelFontSize={OPERATOR_LABEL_FONT_SIZE} labelWidth={OPERATOR_LABEL_WIDTH}>{`OPERATOR ${spec.source}`}</Equipment>)}
 
       <g aria-label="Junctions">
         {[[430, 90, 'AB-merge'], [640, 90, 'T-merge'], [820, 90, 'T-diverter'], [806, 330, 'return-merge'], [806, 520, 'return-sorter'], [480, 540, 'S-diverter']].map(([x, y, id]) => <rect key={String(id)} data-junction-id={id} x={Number(x) - 5} y={Number(y) - 5} width={10} height={10} transform={`rotate(45 ${x} ${y})`} fill="#f8fafb" stroke={COLORS.connector} strokeWidth={2} />)}
       </g>
 
       <g aria-label="Cartbuild detrayers">
-        {CARTBUILD_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => <g key={spec.source} data-detrayer-id={`DETRAYER_${spec.source}`}>
-          <rect x={PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 10} y={465} width={20} height={10} rx={2} fill="#f3c975" stroke="#75551e" strokeWidth={2} />
-          <title>{`DETRAYER ${spec.source} between upstream zones 2 and 3`}</title>
-          <text x={PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 18} y={470} textAnchor="middle" transform={`rotate(-90 ${PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 18} 470)`} fontSize={7} fontWeight={700} fill={COLORS.text}>{`DETRAYER ${spec.source}`}</text>
+        {CARTBUILD_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => <g key={spec.source} data-detrayer-id={`DETRAYER_${spec.source}`} data-component-type="DETRAYER" data-exchanger-id={spec.source}>
+          <rect x={PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 10} y={445} width={20} height={10} rx={2} fill="#f3c975" stroke="#75551e" strokeWidth={2} />
+          <title>{`DETRAYER ${spec.source} between pre-detrayer zone 4 and post-detrayer zone 0`}</title>
+          <text x={PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 18} y={450} textAnchor="middle" transform={`rotate(-90 ${PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 18} 450)`} fontSize={7} fontWeight={700} fill={COLORS.text}>{`DETRAYER ${spec.source}`}</text>
         </g>)}
       </g>
 
       <g aria-label="Trays">
-        {trayPositions.map(({ tray, x, y, width, orientation, segment, zoneIndex }) => {
+        {trayPositions.map(({ tray, x, y, width, orientation, segment, zoneIndex, spiralPositionFt }) => {
           const accent = tray.returnDestination ? COLORS[tray.returnDestination] : COLORS.text
           const fill = tray.korberHeld ? COLORS.held : tray.loadState === 'FULL' ? COLORS.full : COLORS.empty
           const label = String(tray.id).slice(-3)
           const showLabel = width >= 12 && segment !== 'D'
-          return <g key={tray.id} data-tray-id={tray.id} data-segment-id={segment} data-zone-index={zoneIndex} data-load-state={tray.loadState ?? 'EMPTY'} data-payload-origin={tray.payloadOrigin} data-cartbuild-carton-attached={tray.cartbuildCartonAttached || undefined} data-return-destination={tray.returnDestination} data-purge-member={tray.purgeMember || undefined}>
+          return <g key={tray.id} data-tray-id={tray.id} data-segment-id={segment} data-zone-index={zoneIndex} data-spiral-position-ft={spiralPositionFt} data-belt-position-ft={tray.pilePlacement?.component === 'BELT' ? tray.pilePlacement.beltPosFt : undefined} data-load-state={tray.loadState ?? 'EMPTY'} data-payload-origin={tray.payloadOrigin} data-cartbuild-carton-attached={tray.cartbuildCartonAttached || undefined} data-return-destination={tray.returnDestination} data-purge-member={tray.purgeMember || undefined}>
             <title>{`Tray ${tray.id} · ${tray.loadState ?? 'EMPTY'}${tray.returnDestination ? ` · ${tray.returnDestination}` : ''}${tray.purgeMember ? ' · PURGE MEMBER' : ''}${tray.korberHeld ? ' · HELD AT KÖRBER' : ''}`}</title>
             {orientation === 'vertical'
               ? <rect x={x - 7} y={y - 5} width={14} height={10} rx={2} fill={fill} stroke={tray.purgeMember ? COLORS.purge : accent} strokeWidth={tray.purgeMember ? 3 : tray.returnDestination ? 2 : 1} />
@@ -401,7 +469,7 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
         {Object.values(state.cartbuildSystem.lanes).flatMap((lane) => lane.markers.map((carton) => {
           const layout = cartonLayouts.get(`${lane.id}:MDR:${carton.zoneIndex}`)
           if (!layout) return null
-          return <rect key={`${lane.id}-${carton.internalKey}`} data-carton-marker="true" data-cartbuild-lane={lane.id} data-zone-id={`${lane.id}:MDR:${carton.zoneIndex}`} data-carton-state="ON_CONVEYOR" x={layout.x + 3} y={layout.y + layout.h / 2 - 3} width={10} height={6} rx={1} fill="#d39a45" stroke="#6e4819" strokeWidth={1} />
+          return <rect key={`${lane.id}-${carton.internalKey}`} data-carton-marker="true" data-cartbuild-lane={lane.id} data-carton-zone-id={`${lane.id}:MDR:${carton.zoneIndex}`} data-carton-state="ON_CONVEYOR" x={layout.x + 3} y={layout.y + layout.h / 2 - 3} width={10} height={6} rx={1} fill="#d39a45" stroke="#6e4819" strokeWidth={1} />
         }))}
       </g>
 

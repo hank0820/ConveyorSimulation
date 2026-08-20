@@ -53,8 +53,8 @@ describe('Milestone 7 mechanically coupled middle-belt interlock', () => {
       runtime.trays = [
         tray(1, source, pileId, 'BELT', 5),
         tray(2, source, pileId, 'BELT', 10),
-        tray(3, source, pileId, 'MDR_UPSTREAM', 7),
-        tray(4, source, pileId, 'MDR_UPSTREAM', 6),
+        tray(3, source, pileId, 'MDR_POST_DETRAYER', 4),
+        tray(4, source, pileId, 'MDR_POST_DETRAYER', 3),
         tray(5, source, pileId, 'MDR_DOWNSTREAM', 0),
       ]
       runtime.missions = []
@@ -68,8 +68,8 @@ describe('Milestone 7 mechanically coupled middle-belt interlock', () => {
       const positions = blocked.trays.filter((item) => item.pilePlacement?.component === 'BELT').map((item) => item.pilePlacement!.beltPosFt!)
       expect(positions).toEqual(initial)
       expect(positions[1] - positions[0]).toBe(initial[1] - initial[0])
-      expect(blocked.trays.find(({ id }) => id === 3)?.pilePlacement).toEqual({ pileId, component: 'MDR_UPSTREAM', zoneIndex: 7 })
-      expect(blocked.trays.find(({ id }) => id === 4)?.pilePlacement).toEqual({ pileId, component: 'MDR_UPSTREAM', zoneIndex: 6 })
+      expect(blocked.trays.find(({ id }) => id === 3)?.pilePlacement).toEqual({ pileId, component: 'MDR_POST_DETRAYER', zoneIndex: 4 })
+      expect(blocked.trays.find(({ id }) => id === 4)?.pilePlacement).toEqual({ pileId, component: 'MDR_POST_DETRAYER', zoneIndex: 3 })
       expect(blocked.trays.find(({ id }) => id === 3)?.pileRuntime).toBeUndefined()
       expect(blocked.beltDiagnostics.find((belt) => belt.pileId === pileId)).toMatchObject({
         beltRunning: false,
