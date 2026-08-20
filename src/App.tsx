@@ -6,6 +6,8 @@ import SimulationEngine from './simulation/SimulationEngine'
 import { applyOperatingSettingChange, applyPlanningCadenceChange, applyStartScenario } from './operatingSettings'
 import type { SimulationStateWithProgress } from './simulation/types'
 import type { OperatingSettings } from './simulation/types'
+import type { SrsPileId } from './simulation/types'
+import { defaultSrsTargetDrafts, parseSrsTargetDrafts, targetsAreDirty } from './srsTargetDrafts'
 
 const SEGMENTS = [
   { id: 'A1', lengthFt: 103.5, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 45 },
@@ -33,6 +35,9 @@ function App() {
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [configurationNotice, setConfigurationNotice] = useState<string | null>(null)
+  const [selectedTargets, setSelectedTargets] = useState(defaultSrsTargetDrafts)
+  const targetValidation = parseSrsTargetDrafts(selectedTargets)
+  const targetsDirty = targetsAreDirty(selectedTargets, state.srsControl.targets)
 
   // animation loop
   useEffect(() => {
@@ -77,6 +82,7 @@ function App() {
     setState(s)
     setPlaying(false)
     setConfigurationNotice(null)
+    setSelectedTargets(defaultSrsTargetDrafts())
   }
 
   function handleOperatingSetting(setting: keyof OperatingSettings, enabled: boolean) {
@@ -88,6 +94,7 @@ function App() {
   }
 
   function handleStartScenario() {
+    if (!targetValidation.targets) return
     applyStartScenario(
       engineRef.current,
       state.operatingSettings,
@@ -95,7 +102,13 @@ function App() {
       () => setPlaying(false),
       setState,
       setConfigurationNotice,
+      targetValidation.targets,
     )
+  }
+
+  function handleTargetChange(pile: SrsPileId, value: string) {
+    setPlaying(false)
+    setSelectedTargets((targets) => ({ ...targets, [pile]: value }))
   }
 
   return (
@@ -123,6 +136,10 @@ function App() {
         onStep={handleStep}
         onReset={handleReset}
         onStartScenario={handleStartScenario}
+        selectedTargets={selectedTargets}
+        targetErrors={targetValidation.errors}
+        targetsDirty={targetsDirty}
+        onTargetChange={handleTargetChange}
         onOperatingSettingChange={handleOperatingSetting}
         onPlanningCadenceChange={handlePlanningCadence}
         configurationNotice={configurationNotice}

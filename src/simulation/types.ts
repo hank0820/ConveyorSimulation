@@ -322,6 +322,7 @@ export interface CompletedOutboundCycle {
 }
 
 export type SrsPileId = 'A1' | 'B1' | 'C1' | 'T' | 'D' | 'A2' | 'B2' | 'C2'
+export type SrsTargets = Readonly<Record<SrsPileId, number>>
 
 export interface SrsLaneDiagnostic {
   source: SourceId
@@ -345,7 +346,7 @@ export interface SrsLaneDiagnostic {
 }
 
 export interface SrsControlState {
-  targets: Record<SrsPileId, number>
+  targets: SrsTargets
   current: Record<SrsPileId, number>
   globalTarget: number
   globalCurrent: number

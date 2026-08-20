@@ -20,9 +20,11 @@ import type {
   SourceId,
   SourceState,
   SrsPileId,
+  SrsTargets,
   Tray,
   TrayLoadState,
 } from './types'
+import { DEFAULT_SRS_TARGETS, validateSrsTargets } from './srsTargets'
 
 const EPS = 1e-9
 const ZONE_LENGTH_FT = 2.5
@@ -42,8 +44,7 @@ export const INBOUND_COMPOSITE_CONFIGS = {
 const CARTBUILD_LANES: CartbuildLaneId[] = ['CARTBUILD_A', 'CARTBUILD_B', 'CARTBUILD_C']
 const CARTBUILD_ZONE_COUNT = 30
 const CARTBUILD_INTERVAL_SEC = 8
-export const SRS_TARGET_SIZES: Record<SrsPileId, number> = { A1: 24, B1: 16, C1: 16, T: 6, D: 92, A2: 36, B2: 29, C2: 29 }
-const SRS_GLOBAL_TARGET = Object.values(SRS_TARGET_SIZES).reduce((sum, target) => sum + target, 0)
+export { DEFAULT_SRS_TARGETS as SRS_TARGET_SIZES } from './srsTargets'
 const DEFAULT_PLANNING_CADENCE_SEC = 10
 const DEFAULT_SETTINGS = (): OperatingSettings => ({ korberEnabled: true, cartbuildAEnabled: true, cartbuildBEnabled: true, cartbuildCEnabled: true })
 const laneFor = (source: SourceId): CartbuildLaneId => `CARTBUILD_${source}` as CartbuildLaneId
@@ -145,6 +146,7 @@ export default class Milestone7Simulation {
   private robotCounter = 0
   private asrsNextAssign: SourceId = 'A'
   private planningCadenceSec = DEFAULT_PLANNING_CADENCE_SEC
+  private activeTargets: SrsTargets = { ...DEFAULT_SRS_TARGETS }
   private nextPlanningTime = 0
   private asrsAssigned: Record<SourceId, number> = { A: 0, B: 0, C: 0 }
   private asrsLastRelease: Record<SourceId, number> = { A: -1e9, B: -1e9, C: -1e9 }
@@ -208,15 +210,16 @@ export default class Milestone7Simulation {
   }
 
   reset() {
-    this.initialize(DEFAULT_SETTINGS(), DEFAULT_PLANNING_CADENCE_SEC)
+    this.initialize(DEFAULT_SETTINGS(), DEFAULT_PLANNING_CADENCE_SEC, DEFAULT_SRS_TARGETS)
   }
 
-  startScenario(settings: OperatingSettings, planningCadenceSec: number) {
+  startScenario(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets = DEFAULT_SRS_TARGETS) {
     if (!Number.isFinite(planningCadenceSec) || planningCadenceSec <= 0) throw new Error('PendingDemand planning cadence must be a positive finite number')
-    this.initialize(settings, planningCadenceSec)
+    this.initialize(settings, planningCadenceSec, targets)
   }
 
-  private initialize(settings: OperatingSettings, planningCadenceSec: number) {
+  private initialize(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets) {
+    this.activeTargets = validateSrsTargets(targets)
     this.timeSec = 0
     this.trays = []
     this.totalTraysCreated = 0
@@ -269,12 +272,14 @@ export default class Milestone7Simulation {
 
     let nextId = 1
     for (const source of ['A', 'B', 'C'] as SourceId[]) {
-      const result = this.piles.get(`${source}1`)!.initialTrays(nextId, source, SRS_TARGET_SIZES[`${source}1` as 'A1' | 'B1' | 'C1'])
+      const pile = this.piles.get(`${source}1`)!
+      const result = pile.initialTrays(nextId, source, Math.min(this.activeTargets[`${source}1` as 'A1' | 'B1' | 'C1'], pile.getPhysicalCapacity()))
       this.trays.push(...result.trays)
       nextId = result.nextId
     }
     this.totalTraysCreated = nextId - 1
-    for (let zoneIndex = 0; zoneIndex < ZONE_COUNTS.D; zoneIndex++) {
+    const initialDCount = Math.min(this.activeTargets.D, ZONE_COUNTS.D)
+    for (let zoneIndex = ZONE_COUNTS.D - initialDCount; zoneIndex < ZONE_COUNTS.D; zoneIndex++) {
       this.trays.push(this.createZonedTray('D', zoneIndex, 'A'))
     }
     for (const tray of this.trays) tray.loadState = 'EMPTY'
@@ -800,7 +805,7 @@ export default class Milestone7Simulation {
   }
 
   private lanePurgeDemand(source: SourceId, current = this.srsCurrentCounts()) {
-    return current[`${source}1` as 'A1' | 'B1' | 'C1'] - SRS_TARGET_SIZES[`${source}1` as 'A1' | 'B1' | 'C1'] + this.pendingDemand(source)
+    return current[`${source}1` as 'A1' | 'B1' | 'C1'] - this.activeTargets[`${source}1` as 'A1' | 'B1' | 'C1'] + this.pendingDemand(source)
   }
 
   private authorizeSlugIfPossible() {
@@ -928,8 +933,10 @@ export default class Milestone7Simulation {
   }
 
   private positiveAvailability(pile: SrsPileId, current = this.srsCurrentCounts()) {
-    return Math.max(0, SRS_TARGET_SIZES[pile] - current[pile])
+    return Math.max(0, this.activeTargets[pile] - current[pile])
   }
+
+  private globalTarget() { return Object.values(this.activeTargets).reduce((sum, target) => sum + target, 0) }
 
   private laneMissionCapacity(source: SourceId, current = this.srsCurrentCounts()) {
     const local = this.positiveAvailability(`${source}1` as SrsPileId, current)
@@ -1035,7 +1042,7 @@ export default class Milestone7Simulation {
       const current = this.srsCurrentCounts()
       const globalCurrent = Object.values(current).reduce((sum, count) => sum + count, 0)
       const globalPending = sources.reduce((sum, source) => sum + this.pendingDemand(source), 0)
-      if (Math.max(0, SRS_GLOBAL_TARGET - globalCurrent - globalPending) <= 0) return
+      if (Math.max(0, this.globalTarget() - globalCurrent - globalPending) <= 0) return
       const start = sources.indexOf(this.asrsNextAssign)
       let selected: SourceId | undefined
       let missionType: MissionType | undefined
@@ -1408,7 +1415,7 @@ export default class Milestone7Simulation {
     const srsCurrent = this.srsCurrentCounts()
     const srsGlobalCurrent = Object.values(srsCurrent).reduce((sum, count) => sum + count, 0)
     const srsGlobalPending = (['A', 'B', 'C'] as SourceId[]).reduce((sum, source) => sum + this.pendingDemand(source), 0)
-    const srsGlobalAvailable = Math.max(0, SRS_GLOBAL_TARGET - srsGlobalCurrent - srsGlobalPending)
+    const srsGlobalAvailable = Math.max(0, this.globalTarget() - srsGlobalCurrent - srsGlobalPending)
     const srsLanes = Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => {
       const laneMissions = this.missions.filter((mission) => mission.assignedExchanger === source && mission.state !== 'RELEASED')
       const active = this.activeSlug?.source === source ? this.activeSlug : null
@@ -1416,7 +1423,7 @@ export default class Milestone7Simulation {
       const downstreamPile = `${source}2` as 'A2' | 'B2' | 'C2'
       const downstreamAvailable = this.positiveAvailability('T', srsCurrent) + this.positiveAvailability('D', srsCurrent) + this.positiveAvailability(downstreamPile, srsCurrent)
       return [source, {
-        source, targetSize: SRS_TARGET_SIZES[`${source}1` as 'A1' | 'B1' | 'C1'], currentCount: srsCurrent[`${source}1` as 'A1' | 'B1' | 'C1'],
+        source, targetSize: this.activeTargets[`${source}1` as 'A1' | 'B1' | 'C1'], currentCount: srsCurrent[`${source}1` as 'A1' | 'B1' | 'C1'],
         pendingDemand: laneMissions.length, lanePurgeDemand: this.lanePurgeDemand(source, srsCurrent), localAvailable, downstreamAvailable,
         laneMissionCapacity: Math.max(0, localAvailable + downstreamAvailable - laneMissions.length),
         pendingEmptyMissions: laneMissions.filter((mission) => mission.missionType === 'EMPTY').length,
@@ -1529,7 +1536,7 @@ export default class Milestone7Simulation {
         dualCyclePercentage: outboundCompletedCount === 0 ? 0 : completedCountByClassification.DUAL_CYCLE / outboundCompletedCount * 100,
       },
       pendingA: pending('A'), pendingB: pending('B'), pendingC: pending('C'), retrievingA: retrieving('A'), retrievingB: retrieving('B'), retrievingC: retrieving('C'), readyA: ready('A'), readyB: ready('B'), readyC: ready('C'),
-      additionalASRSDemand: srsGlobalAvailable, globalTargetCount: SRS_GLOBAL_TARGET, globalCurrentCount: srsGlobalCurrent, transportInventory: this.zonedOccupancy('PRE_T').filter(Boolean).length + this.zonedOccupancy('T').filter(Boolean).length, physicalPreKorberInventory: physical,
+      additionalASRSDemand: srsGlobalAvailable, globalTargetCount: this.globalTarget(), globalCurrentCount: srsGlobalCurrent, transportInventory: this.zonedOccupancy('PRE_T').filter(Boolean).length + this.zonedOccupancy('T').filter(Boolean).length, physicalPreKorberInventory: physical,
       purgeDemandA: this.lanePurgeDemand('A', srsCurrent), purgeDemandB: this.lanePurgeDemand('B', srsCurrent), purgeDemandC: this.lanePurgeDemand('C', srsCurrent), asrsNextAssign: this.asrsNextAssign, asrsAssignedA: this.asrsAssigned.A, asrsAssignedB: this.asrsAssigned.B, asrsAssignedC: this.asrsAssigned.C,
       preDetrayerMdrA: pileCount('A', 'MDR_PRE_DETRAYER'), postDetrayerMdrA: pileCount('A', 'MDR_POST_DETRAYER'), beltCountA: pileCount('A', 'BELT'), downstreamMdrA: pileCount('A', 'MDR_DOWNSTREAM'), beltRunningA: beltDiagnostics[0].beltRunning,
       preDetrayerMdrB: pileCount('B', 'MDR_PRE_DETRAYER'), postDetrayerMdrB: pileCount('B', 'MDR_POST_DETRAYER'), beltCountB: pileCount('B', 'BELT'), downstreamMdrB: pileCount('B', 'MDR_DOWNSTREAM'), beltRunningB: beltDiagnostics[1].beltRunning,
@@ -1544,7 +1551,7 @@ export default class Milestone7Simulation {
         cartonBalanceError: cartonIntroduced - cartonAttached - cartonOnConveyors - cartonConsumed,
       },
       srsControl: {
-        targets: { ...SRS_TARGET_SIZES }, current: { ...srsCurrent }, globalTarget: SRS_GLOBAL_TARGET, globalCurrent: srsGlobalCurrent,
+        targets: { ...this.activeTargets }, current: { ...srsCurrent }, globalTarget: this.globalTarget(), globalCurrent: srsGlobalCurrent,
         globalPending: srsGlobalPending, globalAvailableCapacity: srsGlobalAvailable, planningCadenceSec: this.planningCadenceSec,
         nextPlanningTime: this.nextPlanningTime, planningCursor: this.asrsNextAssign, lanes: srsLanes,
         tBypassBatch: {

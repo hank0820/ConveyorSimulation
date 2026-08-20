@@ -1,4 +1,4 @@
-import type { Tray, ConveyorSegmentConfig, SimulationStateWithProgress, SourceConfig, SourceId, MergeState, OperatingSettings, SourceState } from './types'
+import type { Tray, ConveyorSegmentConfig, SimulationStateWithProgress, SourceConfig, SourceId, MergeState, OperatingSettings, SourceState, SrsTargets } from './types'
 import ConveyorSegment from './ConveyorSegment'
 import HybridAccumulationPile from './HybridAccumulationPile'
 import Milestone7Simulation from './Milestone7Simulation'
@@ -189,9 +189,9 @@ export class SimulationEngine {
     else if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('PendingDemand planning cadence must be a positive finite number')
   }
 
-  startScenario(settings: OperatingSettings, planningCadenceSec: number) {
+  startScenario(settings: OperatingSettings, planningCadenceSec: number, targets?: SrsTargets) {
     if (!this.milestone7) throw new Error('Scenario startup requires the Milestone 7+ topology')
-    this.milestone7.startScenario(settings, planningCadenceSec)
+    this.milestone7.startScenario(settings, planningCadenceSec, targets)
   }
 
   private tryInjectSources() {
