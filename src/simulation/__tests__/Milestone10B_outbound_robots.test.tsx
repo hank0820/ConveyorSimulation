@@ -32,7 +32,11 @@ type Runtime = {
 const runtimeOf = (engine: SimulationEngine) => (engine as unknown as { milestone7: Runtime }).milestone7
 const robots = (engine: SimulationEngine) => engine.getState().asrsRobotSystem.outboundRobots
 const clearEntrance = (runtime: Runtime, source: SourceId) => {
-  runtime.trays = runtime.trays.filter((tray) => !(tray.pilePlacement?.pileId === `${source}1` && tray.pilePlacement.component === 'MDR_UPSTREAM' && tray.pilePlacement.zoneIndex === 0))
+  runtime.trays = runtime.trays.filter((tray) => !(tray.pilePlacement?.pileId === `${source}1` && tray.pilePlacement.component === 'MDR_PRE_DETRAYER' && tray.pilePlacement.zoneIndex === 0))
+}
+const blockEntrance = (runtime: Runtime, source: SourceId) => {
+  const tray = runtime.trays.find((candidate) => candidate.pilePlacement?.pileId === `${source}1`)!
+  tray.pilePlacement = { pileId: `${source}1`, component: 'MDR_PRE_DETRAYER', zoneIndex: 0 }
 }
 const assertBalances = (engine: SimulationEngine) => {
   const state = engine.getState()
@@ -51,31 +55,31 @@ describe('Milestone 10B outbound ASRS robots', () => {
     expect(robots(engine).map(({ missionId }) => missionId).sort((a, b) => a - b)).toEqual(state.missions.map(({ missionId }) => missionId).sort((a, b) => a - b))
   })
 
-  test('default reset creates 79 outbound robots carrying 79 trays', () => {
+  test('default reset creates 100 outbound robots carrying 100 trays', () => {
     const engine = new SimulationEngine(SEGMENTS)
-    expect(engine.getState().asrsRobotSystem).toMatchObject({ robotCarriedTrayCount: 79 })
-    expect(robots(engine)).toHaveLength(79)
+    expect(engine.getState().asrsRobotSystem).toMatchObject({ robotCarriedTrayCount: 100 })
+    expect(robots(engine)).toHaveLength(100)
     expect(robots(engine).every(({ ownsPayload }) => ownsPayload)).toBe(true)
   })
 
-  test('default time zero has 150 conveyor trays and 229 total physical trays', () => {
+  test('default time zero has 148 conveyor trays and 248 total physical trays', () => {
     const state = new SimulationEngine(SEGMENTS).getState()
-    expect(state.trays).toHaveLength(150)
-    expect(state.physicalTrayCount).toBe(229)
-    expect(state.createdTrayCount).toBe(229)
+    expect(state.trays).toHaveLength(148)
+    expect(state.physicalTrayCount).toBe(248)
+    expect(state.createdTrayCount).toBe(248)
   })
 
   test('CARTBUILD missions create one attached anonymous carton at assignment', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const state = engine.getState()
     expect(robots(engine).filter(({ missionType }) => missionType === 'CARTBUILD').every(({ payloadLoadState, cartbuildCartonAttached }) => payloadLoadState === 'FULL' && cartbuildCartonAttached)).toBe(true)
-    expect(state.cartbuildSystem).toMatchObject({ cartbuildCartonsIntroduced: 79, cartbuildCartonsAttachedToTrays: 79 })
+    expect(state.cartbuildSystem).toMatchObject({ cartbuildCartonsIntroduced: 90, cartbuildCartonsAttachedToTrays: 90 })
   })
 
   test('EMPTY missions create EMPTY payload trays without cartons', () => {
     const engine = new SimulationEngine(SEGMENTS)
     engine.startScenario({ korberEnabled: true, cartbuildAEnabled: false, cartbuildBEnabled: false, cartbuildCEnabled: false }, 10)
-    expect(robots(engine)).toHaveLength(79)
+    expect(robots(engine)).toHaveLength(100)
     expect(robots(engine).every(({ missionType, payloadLoadState, cartbuildCartonAttached }) => missionType === 'EMPTY' && payloadLoadState === 'EMPTY' && !cartbuildCartonAttached)).toBe(true)
     expect(engine.getState().cartbuildSystem.cartbuildCartonsIntroduced).toBe(0)
   })
@@ -95,7 +99,7 @@ describe('Milestone 10B outbound ASRS robots', () => {
     engine.step(179.9)
     const state = engine.getState()
     const original = robots(engine).filter(({ assignedAtSec }) => assignedAtSec === 0)
-    expect(original).toHaveLength(79)
+    expect(original).toHaveLength(100)
     expect(original.every(({ lifecycleState, ownsPayload }) => lifecycleState === 'TRAVELING_OUTBOUND' && ownsPayload)).toBe(true)
     const originalPayloadIds = new Set(original.map(({ payloadTrayId }) => payloadTrayId))
     expect(state.trays.some(({ id }) => originalPayloadIds.has(id))).toBe(false)
@@ -188,6 +192,7 @@ describe('Milestone 10B outbound ASRS robots', () => {
     runtime.missions = [mission]
     mission.state = 'READY_AT_EXCHANGER'
     runtime.asrsLastRelease.A = -1e9
+    blockEntrance(runtime, 'A')
     const before = engine.getState()
     runtime.attemptExchangerReleases(0.1)
     const after = engine.getState()
@@ -205,6 +210,7 @@ describe('Milestone 10B outbound ASRS robots', () => {
     mission.state = 'READY_AT_EXCHANGER'
     runtime.timeSec = 180
     runtime.asrsLastRelease.A = 100
+    blockEntrance(runtime, 'A')
     runtime.attemptExchangerReleases(0.1)
     expect(runtime.asrsLastRelease.A).toBe(100)
   })
@@ -221,6 +227,7 @@ describe('Milestone 10B outbound ASRS robots', () => {
     runtime.missions = [cartbuild, empty]
     runtime.cartons = [{ internalKey: 1, laneId: 'CARTBUILD_A', zoneIndex: 0 }]
     runtime.asrsLastRelease.A = -1e9
+    blockEntrance(runtime, 'A')
     runtime.attemptExchangerReleases()
     expect(cartbuild.state).toBe('READY_AT_EXCHANGER')
     expect(empty.state).toBe('READY_AT_EXCHANGER')
@@ -251,16 +258,16 @@ describe('Milestone 10B outbound ASRS robots', () => {
     const state = engine.getState()
     const markup = renderToStaticMarkup(createElement(ConveyorDiagram, { segments: state.segments, trays: state.trays, state }))
     for (const { payloadTrayId } of state.asrsRobotSystem.outboundRobots) expect(markup).not.toContain(`data-tray-id="${payloadTrayId}"`)
-    expect((markup.match(/data-tray-id=/g) ?? [])).toHaveLength(150)
+    expect((markup.match(/data-tray-id=/g) ?? [])).toHaveLength(148)
   })
 
   test('Milestone 9 allocation, timing, SRS counts, and 10A reservations remain valid', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const state = engine.getState()
-    expect([state.pendingA, state.pendingB, state.pendingC]).toEqual([27, 26, 26])
+    expect([state.pendingA, state.pendingB, state.pendingC]).toEqual([34, 33, 33])
     expect(state.missions.every(({ readyAtSec, createdAtSec }) => readyAtSec - createdAtSec === 180)).toBe(true)
-    expect(state.srsControl).toMatchObject({ globalCurrent: 150, globalPending: 79, globalAvailableCapacity: 0 })
-    expect([state.cartbuildSystem.lanes.CARTBUILD_A.availablePositions, state.cartbuildSystem.lanes.CARTBUILD_B.availablePositions, state.cartbuildSystem.lanes.CARTBUILD_C.availablePositions]).toEqual([3, 4, 4])
+    expect(state.srsControl).toMatchObject({ globalCurrent: 148, globalPending: 100, globalAvailableCapacity: 0 })
+    expect([state.cartbuildSystem.lanes.CARTBUILD_A.availablePositions, state.cartbuildSystem.lanes.CARTBUILD_B.availablePositions, state.cartbuildSystem.lanes.CARTBUILD_C.availablePositions]).toEqual([0, 0, 0])
     assertBalances(engine)
   })
 })

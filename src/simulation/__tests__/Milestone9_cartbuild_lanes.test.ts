@@ -42,7 +42,7 @@ type Runtime = {
 const runtimeOf = (engine: SimulationEngine) => (engine as unknown as { milestone7: Runtime }).milestone7
 const pileTray = (id: number, source: SourceId, zoneIndex: number, loadState: 'EMPTY' | 'FULL' = 'EMPTY'): Tray => ({
   id, currentSegmentId: `${source}1`, positionFt: (zoneIndex + 0.5) * 2.5, status: 'BLOCKED', createdAtSec: 0,
-  originSourceId: source, loadState, pilePlacement: { pileId: `${source}1`, component: 'MDR_UPSTREAM', zoneIndex },
+  originSourceId: source, loadState, pilePlacement: { pileId: `${source}1`, component: 'MDR_PRE_DETRAYER', zoneIndex },
 })
 const zonedTray = (id: number, conveyorId: NonNullable<Tray['zonePlacement']>['conveyorId'], zoneIndex: number): Tray => ({
   id, currentSegmentId: conveyorId, positionFt: (zoneIndex + 0.5) * 2.5, status: 'BLOCKED', createdAtSec: 0,
@@ -76,7 +76,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     state = engine.getState()
     expect(state.timeSec).toBe(0)
     expect(state.operatingSettings).toEqual({ korberEnabled: true, cartbuildAEnabled: true, cartbuildBEnabled: true, cartbuildCEnabled: true })
-    expect(state.cartbuildSystem.cartbuildCartonsIntroduced).toBe(79)
+    expect(state.cartbuildSystem.cartbuildCartonsIntroduced).toBe(90)
   })
 
   test('runtime settings mutate the same engine without changing time, trays, missions, or clocks', () => {
@@ -227,10 +227,10 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     expect(currentB.slice(existingB.length).every((mission) => mission.missionType === 'EMPTY')).toBe(true)
   })
 
-  test('loaded CARTBUILD tray remains FULL through zones 0-2 and splits atomically into zone 3 and lane zone 0', () => {
+  test('loaded CARTBUILD tray remains FULL through pre-detrayer zones 0-4 and splits atomically into post zone 0 and lane zone 0', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
-    const tray = pileTray(1, 'A', 2, 'FULL')
+    const tray = pileTray(1, 'A', 4, 'FULL')
     tray.payloadOrigin = 'CARTBUILD'
     tray.cartbuildCartonAttached = true
     runtime.trays = [tray]
@@ -240,7 +240,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     runtime.cartonIntroduced = { A: 1, B: 0, C: 0 }
     for (let tick = 0; tick < 14; tick++) runtime.processPiles(0.1)
     const state = engine.getState()
-    expect(state.trays[0]).toMatchObject({ id: 1, loadState: 'EMPTY', pilePlacement: { component: 'MDR_UPSTREAM', zoneIndex: 3 } })
+    expect(state.trays[0]).toMatchObject({ id: 1, loadState: 'EMPTY', pilePlacement: { component: 'MDR_POST_DETRAYER', zoneIndex: 0 } })
     expect(state.trays[0].cartbuildCartonAttached).toBeUndefined()
     expect(state.cartbuildSystem.lanes.CARTBUILD_A.markers).toEqual([expect.objectContaining({ laneId: 'CARTBUILD_A', zoneIndex: 0 })])
     expect(state.cartbuildSystem.detrayers.A.splitCount).toBe(1)
@@ -248,19 +248,19 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
   })
 
   test.each([
-    ['zone 3', [pileTray(2, 'A', 3)], []],
+    ['post-detrayer zone 0', [{ ...pileTray(2, 'A', 0), pilePlacement: { pileId: 'A1', component: 'MDR_POST_DETRAYER' as const, zoneIndex: 0 } }], []],
     ['carton entrance', [], [{ internalKey: 8, laneId: 'CARTBUILD_A' as const, zoneIndex: 0 }]],
   ])('detrayer blocks atomically when %s is occupied', (_reason, blockers, cartons) => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
-    const loaded = pileTray(1, 'A', 2, 'FULL')
+    const loaded = pileTray(1, 'A', 4, 'FULL')
     loaded.payloadOrigin = 'CARTBUILD'; loaded.cartbuildCartonAttached = true
     runtime.trays = [loaded, ...blockers]
     runtime.cartons = cartons
     runtime.totalTraysCreated = runtime.trays.length
     runtime.cartonIntroduced = { A: 1 + cartons.length, B: 0, C: 0 }
     for (let tick = 0; tick < 20; tick++) runtime.processPiles(0.1)
-    expect(loaded).toMatchObject({ loadState: 'FULL', cartbuildCartonAttached: true, pilePlacement: { zoneIndex: 2 } })
+    expect(loaded).toMatchObject({ loadState: 'FULL', cartbuildCartonAttached: true, pilePlacement: { component: 'MDR_PRE_DETRAYER', zoneIndex: 4 } })
     expect(runtime.cartons).toHaveLength(cartons.length)
     expect(engine.getState().cartbuildSystem.detrayers.A.blockedTicks).toBeGreaterThan(0)
   })
@@ -268,15 +268,15 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
   test('pure EMPTY trays bypass detraying and Körber payloads are explicitly rejected', () => {
     const emptyEngine = new SimulationEngine(SEGMENTS)
     const emptyRuntime = runtimeOf(emptyEngine)
-    emptyRuntime.trays = [pileTray(1, 'A', 2)]
+    emptyRuntime.trays = [pileTray(1, 'A', 4)]
     emptyRuntime.cartons = []
     for (let tick = 0; tick < 14; tick++) emptyRuntime.processPiles(0.1)
-    expect(emptyRuntime.trays[0].pilePlacement?.zoneIndex).toBe(3)
+    expect(emptyRuntime.trays[0].pilePlacement).toMatchObject({ component: 'MDR_POST_DETRAYER', zoneIndex: 0 })
     expect(emptyRuntime.cartons).toHaveLength(0)
 
     const invalidEngine = new SimulationEngine(SEGMENTS)
     const invalidRuntime = runtimeOf(invalidEngine)
-    const invalid = pileTray(2, 'A', 2, 'FULL'); invalid.payloadOrigin = 'KORBER'
+    const invalid = pileTray(2, 'A', 4, 'FULL'); invalid.payloadOrigin = 'KORBER'
     invalidRuntime.trays = [invalid]
     expect(() => invalidRuntime.processPiles(0.1)).toThrow(/Körber payload tray 2/)
   })
@@ -409,8 +409,8 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
   test('disabled Korber starts no new transformation while an existing hold and return flow continue', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
-    const held = zonedTray(1, 'D', 93); held.zonePlacement = undefined; held.korberHeld = true; held.loadState = 'FULL'; held.payloadOrigin = 'KORBER'
-    const waiting = zonedTray(2, 'D', 93)
+    const held = zonedTray(1, 'D', 91); held.zonePlacement = undefined; held.korberHeld = true; held.loadState = 'FULL'; held.payloadOrigin = 'KORBER'
+    const waiting = zonedTray(2, 'D', 91)
     runtime.trays = [held, waiting]
     runtime.totalTraysCreated = 2
     runtime.nextConsumptionTime = 0
@@ -418,7 +418,7 @@ describe('Milestone 9 cartbuild operating modes and physical lanes', () => {
     runtime.processKorber()
     expect(held.zonePlacement).toEqual({ conveyorId: 'E', zoneIndex: 0 })
     runtime.processKorber()
-    expect(waiting.zonePlacement).toEqual({ conveyorId: 'D', zoneIndex: 93 })
+    expect(waiting.zonePlacement).toEqual({ conveyorId: 'D', zoneIndex: 91 })
     engine.setOperatingSetting('korberEnabled', true)
     runtime.timeSec = runtime.nextConsumptionTime
     runtime.processKorber()

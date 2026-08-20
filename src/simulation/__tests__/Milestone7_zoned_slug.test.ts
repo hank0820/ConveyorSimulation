@@ -25,20 +25,20 @@ const assertInvariants = (engine: SimulationEngine) => {
 }
 
 describe('Milestone 7 topology and reset', () => {
-  test('uses shared PRE_T, direct C routing, and authoritative 8/12/94 zones', () => {
+  test('uses shared PRE_T, direct C routing, and authoritative 6/12/92 zones', () => {
     const state = createEngine().getState()
     expect(state.segments.map(({ id, nextSegmentId, maxOccupancy }) => [id, nextSegmentId, maxOccupancy])).toEqual([
-      ['A1', 'PRE_T', 24], ['B1', 'PRE_T', 16], ['C1', 'T', 16],
-      ['PRE_T', 'T', 8], ['T', 'D', 12], ['D', undefined, 94],
+      ['A1', 'PRE_T', 45], ['B1', 'PRE_T', 38], ['C1', 'T', 38],
+      ['PRE_T', 'T', 6], ['T', 'D', 12], ['D', undefined, 92],
     ])
-    expect(state.zonedOccupancy).toEqual({ PRE_T: 0, T: 0, D: 94 })
+    expect(state.zonedOccupancy).toEqual({ PRE_T: 0, T: 0, D: 92 })
     expect(countPile(state.trays, 'A')).toBe(24)
     expect(countPile(state.trays, 'B')).toBe(16)
     expect(countPile(state.trays, 'C')).toBe(16)
     expect(state.slugCursor).toBe('A')
     expect(state.activeSlug).toBeNull()
-    expect(state.trays).toHaveLength(150)
-    expect(state.createdTrayCount).toBe(229)
+    expect(state.trays).toHaveLength(148)
+    expect(state.createdTrayCount).toBe(248)
     assertInvariants(createEngine())
   })
 
@@ -59,7 +59,7 @@ describe('Milestone 7 topology and reset', () => {
 describe('Milestone 7 D and Körber physics', () => {
   test('waits a full interval and consumes only the final-zone tray', () => {
     const engine = createEngine()
-    const finalId = engine.getState().trays.find((tray) => tray.zonePlacement?.conveyorId === 'D' && tray.zonePlacement.zoneIndex === 93)!.id
+    const finalId = engine.getState().trays.find((tray) => tray.zonePlacement?.conveyorId === 'D' && tray.zonePlacement.zoneIndex === 91)!.id
     engine.step(INTERVAL - 0.01)
     expect(engine.getState().korber.totalConsumed).toBe(0)
     engine.step(0.02)
@@ -82,7 +82,7 @@ describe('Milestone 7 D and Körber physics', () => {
     engine.step(0.2)
     expect(engine.getState().dFinalZoneOccupied).toBe(true)
     expect(engine.getState().dEntranceAvailable).toBe(false)
-    engine.step(114.5)
+    engine.step(111.5)
     expect(engine.getState().dEntranceAvailable).toBe(false)
     engine.step(2)
     expect(engine.getState().dEntranceAvailable).toBe(true)
@@ -91,12 +91,12 @@ describe('Milestone 7 D and Körber physics', () => {
   test('starvation consumes the next final-zone arrival once and schedules a fresh interval', () => {
     const engine = createEngine()
     const runtime = (engine as unknown as { milestone7: { trays: Tray[]; nextConsumptionTime: number } }).milestone7
-    const final = runtime.trays.find((tray) => tray.zonePlacement?.conveyorId === 'D' && tray.zonePlacement.zoneIndex === 93)!
-    final.zonePlacement!.zoneIndex = 92
+    const final = runtime.trays.find((tray) => tray.zonePlacement?.conveyorId === 'D' && tray.zonePlacement.zoneIndex === 91)!
+    final.zonePlacement!.zoneIndex = 90
     runtime.nextConsumptionTime = 0
     engine.step(0.1)
     expect(engine.getState().korber.starved).toBe(true)
-    final.zonePlacement!.zoneIndex = 93
+    final.zonePlacement!.zoneIndex = 91
     engine.step(0.1)
     const consumed = engine.getState()
     expect(consumed.korber.totalConsumed).toBe(1)
@@ -113,7 +113,7 @@ describe('Milestone 7 D and Körber physics', () => {
 })
 
 describe('Milestone 7 slug arbitration and invariants', () => {
-  test('100 accumulated MDR intervals retain 125-second timing within one tick', () => {
+  test('96 accumulated MDR intervals retain 120-second timing within one tick', () => {
     type Runtime = { trays: Tray[]; totalTraysCreated: number; consumedCount: number; nextConsumptionTime: number }
     const elapsedFor = (conveyorId: 'PRE_T' | 'D', finalZone: number) => {
       const engine = createEngine()
@@ -125,9 +125,9 @@ describe('Milestone 7 slug arbitration and invariants', () => {
       while (engine.getState().trays[0].zonePlacement!.zoneIndex < finalZone) engine.step(0.05)
       return engine.getState().timeSec
     }
-    const elapsed = elapsedFor('D', 93) + elapsedFor('PRE_T', 7)
-    expect(elapsed).toBeGreaterThanOrEqual(125)
-    expect(elapsed).toBeLessThanOrEqual(125.1)
+    const elapsed = elapsedFor('D', 91) + elapsedFor('PRE_T', 5)
+    expect(elapsed).toBeGreaterThanOrEqual(120)
+    expect(elapsed).toBeLessThanOrEqual(120.1)
   })
 
   test('skips a short lane for a full lane, otherwise freezes the cursor lane partial slug', () => {
@@ -143,6 +143,7 @@ describe('Milestone 7 slug arbitration and invariants', () => {
     firstRuntime.trays = firstRuntime.trays.filter((tray) => tray.zonePlacement?.conveyorId !== 'D' || tray.zonePlacement.zoneIndex !== 0)
     firstRuntime.missions = []
     firstRuntime.trays = firstRuntime.trays.filter((tray) => tray.pilePlacement?.pileId !== 'A1' || tray.id <= 7)
+    firstRuntime.trays.push(...Array.from({ length: 22 }, (_, index) => ({ id: 1000 + index, currentSegmentId: 'B1', positionFt: 1, status: 'BLOCKED' as const, createdAtSec: 0, originSourceId: 'B' as const, pilePlacement: { pileId: 'B1', component: 'MDR_DOWNSTREAM' as const, zoneIndex: index % 8 } })))
     firstRuntime.slugCursor = 'A'
     firstRuntime.authorizeSlugIfPossible()
     expect(first.getState().activeSlug?.source).toBe('B')
@@ -164,7 +165,7 @@ describe('Milestone 7 slug arbitration and invariants', () => {
     expect(frozen.source).toBe('A')
     expect(frozen.authorizedCount).toBe(5)
     const replacementId = 999
-    secondRuntime.trays.push({ id: replacementId, currentSegmentId: 'A1', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', pilePlacement: { pileId: 'A1', component: 'MDR_UPSTREAM', zoneIndex: 0 } })
+    secondRuntime.trays.push({ id: replacementId, currentSegmentId: 'A1', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', pilePlacement: { pileId: 'A1', component: 'MDR_PRE_DETRAYER', zoneIndex: 0 } })
     expect(second.getState().activeSlug?.authorizedTrayIds).toEqual(frozen.authorizedTrayIds)
     expect(second.getState().activeSlug?.authorizedTrayIds).not.toContain(replacementId)
   })
@@ -223,6 +224,6 @@ describe('Milestone 7 slug arbitration and invariants', () => {
       assertInvariants(engine)
     }
     expect([...seen].sort()).toEqual(['A', 'B', 'C'])
-    expect(maximumPhysical).toBeLessThanOrEqual(150)
+    expect(maximumPhysical).toBeLessThanOrEqual(148)
   }, 30_000)
 })

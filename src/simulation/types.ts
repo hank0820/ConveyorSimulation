@@ -23,7 +23,7 @@ export interface Tray {
   // optional physical placement inside a logical hybrid pile
   pilePlacement?: {
     pileId: string // e.g. 'A1','B1','C1'
-    component: 'MDR_UPSTREAM' | 'BELT' | 'MDR_DOWNSTREAM'
+    component: 'MDR_PRE_DETRAYER' | 'MDR_POST_DETRAYER' | 'BELT' | 'MDR_DOWNSTREAM'
     zoneIndex?: number // for MDR zones, 0-based from upstream
     beltPosFt?: number // for belt trays: position along belt (0..beltLength)
   }
@@ -70,7 +70,7 @@ export interface DetrayerDiagnostic {
   source: SourceId
   loadedTrayWaiting: boolean
   trayId: number | null
-  zone3Available: boolean
+  postDetrayerZone0Available: boolean
   cartonLaneZone0Available: boolean
   splitCount: number
   blockedTicks: number
@@ -467,15 +467,18 @@ export interface SimulationState {
   asrsAssignedB: number
   asrsAssignedC: number
   // Milestone 6 hybrid pile diagnostics
-  upstreamMdrA: number
+  preDetrayerMdrA: number
+  postDetrayerMdrA: number
   beltCountA: number
   downstreamMdrA: number
   beltRunningA: boolean
-  upstreamMdrB: number
+  preDetrayerMdrB: number
+  postDetrayerMdrB: number
   beltCountB: number
   downstreamMdrB: number
   beltRunningB: boolean
-  upstreamMdrC: number
+  preDetrayerMdrC: number
+  postDetrayerMdrC: number
   beltCountC: number
   downstreamMdrC: number
   beltRunningC: boolean

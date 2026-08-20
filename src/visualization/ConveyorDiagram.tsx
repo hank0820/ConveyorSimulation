@@ -13,7 +13,7 @@ import type {
 
 interface Props { segments: ConveyorSegmentConfig[]; trays: Tray[]; state: SimulationStateWithProgress }
 type Orientation = 'horizontal' | 'vertical'
-type Region = 'MDR' | 'MDR_UPSTREAM' | 'BELT' | 'MDR_DOWNSTREAM'
+type Region = 'MDR' | 'MDR_PRE_DETRAYER' | 'MDR_POST_DETRAYER' | 'BELT' | 'MDR_DOWNSTREAM'
 interface LayoutRect { x: number; y: number; w: number; h: number; conveyorId: string; region: Region; orientation: Orientation; zoneIndex?: number; reverse?: boolean }
 
 const VIEWBOX = { width: 1600, height: 1040 }
@@ -153,12 +153,12 @@ const robotPosition = (robot: VisualRobot, state: SimulationStateWithProgress) =
 }
 
 const ZONED_SPECS: Array<{ id: ZonedConveyorId; count: number; x: number; y: number; length: number; orientation: Orientation; reverse?: boolean; label: string }> = [
-  { id: 'PRE_T', count: 8, x: 450, y: 90, length: 160, orientation: 'horizontal', label: 'PRE_T · 8 zones' },
+  { id: 'PRE_T', count: 6, x: 450, y: 90, length: 160, orientation: 'horizontal', label: 'PRE_T · 6 zones' },
   { id: 'T', count: 12, x: 650, y: 90, length: 180, orientation: 'horizontal', label: 'T · 12 zones' },
-  { id: 'D', count: 94, x: 850, y: 90, length: 650, orientation: 'horizontal', label: 'D · 94 zones' },
-  { id: 'PURGE', count: 6, x: 806, y: 170, length: 150, orientation: 'vertical', label: 'PURGE · 6 zones' },
-  { id: 'E', count: 35, x: 850, y: 330, length: 610, orientation: 'horizontal', reverse: true, label: 'E · 35 zones' },
-  { id: 'X', count: 5, x: 794, y: 370, length: 120, orientation: 'vertical', label: 'X · 5 zones' },
+  { id: 'D', count: 92, x: 850, y: 90, length: 650, orientation: 'horizontal', label: 'D · 92 zones' },
+  { id: 'PURGE', count: 12, x: 806, y: 170, length: 150, orientation: 'vertical', label: 'PURGE · 12 zones' },
+  { id: 'E', count: 28, x: 850, y: 330, length: 610, orientation: 'horizontal', reverse: true, label: 'E · 28 zones' },
+  { id: 'X', count: 4, x: 794, y: 370, length: 120, orientation: 'vertical', label: 'X · 4 zones' },
   { id: 'S', count: 8, x: 488, y: 540, length: 74, orientation: 'horizontal', reverse: true, label: 'S · 8 zones' },
   { id: 'A2', count: 36, x: 288, y: 590, length: 205, orientation: 'vertical', label: 'A2 · 36 zones' },
   { id: 'B2', count: 29, x: 418, y: 590, length: 205, orientation: 'vertical', label: 'B2 · 29 zones' },
@@ -166,9 +166,9 @@ const ZONED_SPECS: Array<{ id: ZonedConveyorId; count: number; x: number; y: num
 ]
 
 const PILES = [
-  { id: 'A1', x: 300, upstream: 8, beltFt: 23.5, beltHeight: 70, downstream: 15, label: 'A1 · 24' },
-  { id: 'B1', x: 430, upstream: 8, beltFt: 43.5, beltHeight: 120, downstream: 7, label: 'B1 · 16' },
-  { id: 'C1', x: 620, upstream: 8, beltFt: 43.5, beltHeight: 120, downstream: 7, label: 'C1 · 16' },
+  { id: 'A1', x: 300, pre: 5, post: 5, beltFt: 41, beltHeight: 100, downstream: 15, label: 'A1 · 45 positions' },
+  { id: 'B1', x: 430, pre: 5, post: 5, beltFt: 41, beltHeight: 100, downstream: 8, label: 'B1 · 38 positions' },
+  { id: 'C1', x: 620, pre: 5, post: 5, beltFt: 41, beltHeight: 100, downstream: 8, label: 'C1 · 38 positions' },
 ] as const
 
 const CARTBUILD_SPECS: Array<{ id: CartbuildLaneId; source: 'A' | 'B' | 'C'; x: number; y: number; length: number; label: string }> = [
@@ -215,12 +215,16 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
 
   for (const pile of PILES) {
     const bottom = 500
-    const upstreamZoneHeight = 10
+    const mdrZoneHeight = 10
     const downstreamZoneHeight = 8
-    for (let index = 0; index < pile.upstream; index++) {
-      layouts.set(`${pile.id}:MDR_UPSTREAM:${index}`, { x: pile.x - ZONE_THICKNESS / 2, y: bottom - (index + 1) * upstreamZoneHeight, w: ZONE_THICKNESS, h: upstreamZoneHeight, conveyorId: pile.id, region: 'MDR_UPSTREAM', orientation: 'vertical', zoneIndex: index })
+    for (let index = 0; index < pile.pre; index++) {
+      layouts.set(`${pile.id}:MDR_PRE_DETRAYER:${index}`, { x: pile.x - ZONE_THICKNESS / 2, y: bottom - (index + 1) * mdrZoneHeight, w: ZONE_THICKNESS, h: mdrZoneHeight, conveyorId: pile.id, region: 'MDR_PRE_DETRAYER', orientation: 'vertical', zoneIndex: index })
     }
-    const beltBottom = bottom - pile.upstream * upstreamZoneHeight
+    const postBottom = bottom - pile.pre * mdrZoneHeight
+    for (let index = 0; index < pile.post; index++) {
+      layouts.set(`${pile.id}:MDR_POST_DETRAYER:${index}`, { x: pile.x - ZONE_THICKNESS / 2, y: postBottom - (index + 1) * mdrZoneHeight, w: ZONE_THICKNESS, h: mdrZoneHeight, conveyorId: pile.id, region: 'MDR_POST_DETRAYER', orientation: 'vertical', zoneIndex: index })
+    }
+    const beltBottom = postBottom - pile.post * mdrZoneHeight
     layouts.set(`${pile.id}:BELT`, { x: pile.x - ZONE_THICKNESS / 2, y: beltBottom - pile.beltHeight, w: ZONE_THICKNESS, h: pile.beltHeight, conveyorId: pile.id, region: 'BELT', orientation: 'vertical' })
     const downstreamBottom = beltBottom - pile.beltHeight
     for (let index = 0; index < pile.downstream; index++) {
@@ -267,7 +271,7 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
       <rect width={VIEWBOX.width} height={VIEWBOX.height} fill="url(#schematic-grid)" opacity={0.7} />
 
       <g aria-label="Implemented routing connectors">
-        <Connector id="A1-to-PRE_T" from="A1" to="PRE_T" d="M300 218 L300 160 L430 160 L430 90 L450 90" />
+        <Connector id="A1-to-PRE_T" from="A1" to="PRE_T" d="M300 180 L300 160 L430 160 L430 90 L450 90" />
         <Connector id="B1-to-PRE_T" from="B1" to="PRE_T" d="M430 232 L430 90 L450 90" />
         <Connector id="PRE_T-to-T" from="PRE_T" to="T" d="M610 90 L650 90" />
         <Connector id="C1-to-T" from="C1" to="T" d="M620 232 L620 150 L640 150 L640 90 L650 90" />
@@ -374,9 +378,9 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
 
       <g aria-label="Cartbuild detrayers">
         {CARTBUILD_SPECS.filter((spec) => segments.some((segment) => segment.id === spec.id)).map((spec) => <g key={spec.source} data-detrayer-id={`DETRAYER_${spec.source}`}>
-          <rect x={PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 10} y={465} width={20} height={10} rx={2} fill="#f3c975" stroke="#75551e" strokeWidth={2} />
-          <title>{`DETRAYER ${spec.source} between upstream zones 2 and 3`}</title>
-          <text x={PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 18} y={470} textAnchor="middle" transform={`rotate(-90 ${PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 18} 470)`} fontSize={7} fontWeight={700} fill={COLORS.text}>{`DETRAYER ${spec.source}`}</text>
+          <rect x={PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 10} y={445} width={20} height={10} rx={2} fill="#f3c975" stroke="#75551e" strokeWidth={2} />
+          <title>{`DETRAYER ${spec.source} between pre-detrayer zone 4 and post-detrayer zone 0`}</title>
+          <text x={PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 18} y={450} textAnchor="middle" transform={`rotate(-90 ${PILES.find((pile) => pile.id === `${spec.source}1`)!.x - 18} 450)`} fontSize={7} fontWeight={700} fill={COLORS.text}>{`DETRAYER ${spec.source}`}</text>
         </g>)}
       </g>
 

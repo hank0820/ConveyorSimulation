@@ -51,7 +51,7 @@ const assertPhysical = (state: ReturnType<SimulationEngine['getState']>) => {
 describe('Milestone 8 return conveyor topology and lifecycle', () => {
   test('declares the required return geometry and resets empty with cursor A2', () => {
     const engine = createEngine()
-    const expected = { PURGE: [15, 6], E: [87.5, 35], X: [12.5, 5], S: [20, 8], A2: [90, 36], B2: [72.5, 29], C2: [72.5, 29] }
+    const expected = { PURGE: [30, 12], E: [70, 28], X: [10, 4], S: [20, 8], A2: [90, 36], B2: [72.5, 29], C2: [72.5, 29] }
     const state = engine.getState()
     for (const [id, [lengthFt, zones]] of Object.entries(expected)) {
       const segment = state.segments.find((candidate) => candidate.id === id)!
@@ -69,7 +69,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
   test('Körber preserves ID, transforms EMPTY to FULL, holds one blocked tray, and restarts without catch-up', () => {
     const engine = createEngine()
     const runtime = runtimeOf(engine)
-    runtime.trays = [zoned(1, 'D', 93), zoned(40, 'D', 92), ...Array.from({ length: 35 }, (_, zone) => zoned(zone + 2, 'E', zone))]
+    runtime.trays = [zoned(1, 'D', 91), zoned(40, 'D', 90), ...Array.from({ length: 28 }, (_, zone) => zoned(zone + 2, 'E', zone))]
     runtime.missions = []
     runtime.totalTraysCreated = runtime.trays.length
     runtime.consumedCount = 0
@@ -81,7 +81,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     expect(state.trays.find(({ id }) => id === 1)).toMatchObject({ id: 1, loadState: 'FULL', korberHeld: true })
     expect(state.trays.find(({ id }) => id === 1)?.zonePlacement).toBeUndefined()
     expect(state.returnSystem.returnedHistory.some(({ trayId }) => trayId === 1)).toBe(false)
-    expect(state.createdTrayCount).toBe(37)
+    expect(state.createdTrayCount).toBe(30)
     engine.step(5)
     state = engine.getState()
     expect(state.returnSystem.korberProcessedCount).toBe(1)
@@ -141,12 +141,12 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
   test('E has strict eligible priority into X and PURGE proceeds when E is not ready', () => {
     const engine = createEngine()
     const runtime = runtimeOf(engine)
-    runtime.trays = [zoned(1, 'E', 34, 'FULL'), zoned(2, 'PURGE', 5)]
+    runtime.trays = [zoned(1, 'E', 27, 'FULL'), zoned(2, 'PURGE', 11)]
     runtime.totalTraysCreated = 2
     runtime.processReturnBoundaries()
     expect(runtime.trays.find(({ id }) => id === 1)?.zonePlacement).toEqual({ conveyorId: 'X', zoneIndex: 0 })
     expect(runtime.trays.find(({ id }) => id === 2)?.zonePlacement?.conveyorId).toBe('PURGE')
-    runtime.trays = [zoned(2, 'PURGE', 5), zoned(3, 'E', 33, 'FULL')]
+    runtime.trays = [zoned(2, 'PURGE', 11), zoned(3, 'E', 26, 'FULL')]
     runtime.totalTraysCreated = 2
     runtime.processReturnBoundaries()
     expect(runtime.trays.find(({ id }) => id === 2)?.zonePlacement).toEqual({ conveyorId: 'X', zoneIndex: 0 })
@@ -159,7 +159,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     runtime.totalTraysCreated = 3
     const routed: Array<[number, ReturnDestination, string]> = []
     for (let id = 1; id <= 3; id++) {
-      const item = zoned(id, 'X', 4, id % 2 ? 'EMPTY' : 'FULL')
+      const item = zoned(id, 'X', 3, id % 2 ? 'EMPTY' : 'FULL')
       runtime.trays.push(item)
       runtime.processReturnBoundaries()
       routed.push([id, item.returnDestination!, item.zonePlacement!.conveyorId])
@@ -183,7 +183,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     runtime.totalTraysCreated = 9
     const trace: Array<{ id: number; load: string; destination: ReturnDestination; before: ReturnDestination; after: ReturnDestination; route: string }> = []
     for (let id = 1; id <= 9; id++) {
-      const item = zoned(id, 'X', 4, id % 2 ? 'EMPTY' : 'FULL')
+      const item = zoned(id, 'X', 3, id % 2 ? 'EMPTY' : 'FULL')
       runtime.trays.push(item)
       const before = runtime.sorterCursor
       runtime.processReturnBoundaries()
@@ -195,14 +195,14 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     expect(trace.every(({ before, after, destination }) => before === destination && after === (destination === 'A2' ? 'B2' : destination === 'B2' ? 'C2' : 'A2'))).toBe(true)
 
     const aBlocked = zoned(20, 'A2', 0)
-    const skipped = zoned(21, 'X', 4)
+    const skipped = zoned(21, 'X', 3)
     runtime.trays = [aBlocked, skipped]
     runtime.sorterCursor = 'A2'
     runtime.processReturnBoundaries()
     expect(skipped.returnDestination).toBe('B2')
     expect(runtime.sorterCursor).toBe('C2')
 
-    const frozen = zoned(22, 'X', 4); frozen.returnDestination = 'A2'
+    const frozen = zoned(22, 'X', 3); frozen.returnDestination = 'A2'
     const sBlocker = zoned(23, 'S', 0)
     runtime.trays = [frozen, sBlocker]
     runtime.sorterCursor = 'C2'
@@ -282,7 +282,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     const engine = createEngine()
     const runtime = runtimeOf(engine)
     runtime.trays = [
-      ...Array.from({ length: 94 }, (_, zone) => zoned(zone + 1, 'D', zone)),
+      ...Array.from({ length: 92 }, (_, zone) => zoned(zone + 1, 'D', zone)),
       ...Array.from({ length: 12 }, (_, zone) => zoned(zone + 95, 'T', zone)),
     ]
     runtime.missions = []

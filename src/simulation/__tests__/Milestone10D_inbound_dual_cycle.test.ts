@@ -58,12 +58,17 @@ const placeFinalTray = (engine: SimulationEngine, source: SourceId, loadState: T
 }
 
 const openPileEntrance = (runtime: Runtime, source: SourceId) => {
-  const tray = runtime.trays.find((candidate) => candidate.pilePlacement?.pileId === `${source}1` && candidate.pilePlacement.component === 'MDR_UPSTREAM' && candidate.pilePlacement.zoneIndex === 0)
+  const tray = runtime.trays.find((candidate) => candidate.pilePlacement?.pileId === `${source}1` && candidate.pilePlacement.component === 'MDR_PRE_DETRAYER' && candidate.pilePlacement.zoneIndex === 0)
   if (tray) {
     tray.currentSegmentId = 'TEST_HOLD'
     tray.pilePlacement = undefined
     tray.pileRuntime = undefined
   }
+}
+
+const blockPileEntrance = (runtime: Runtime, source: SourceId) => {
+  const tray = runtime.trays.find((candidate) => candidate.pilePlacement?.pileId === `${source}1`)!
+  tray.pilePlacement = { pileId: `${source}1`, component: 'MDR_PRE_DETRAYER', zoneIndex: 0 }
 }
 
 const retainOutbound = (runtime: Runtime, source: SourceId, count = 1) => {
@@ -179,6 +184,7 @@ describe('Milestone 10D inbound reservations and dual cycles', () => {
     const { runtime, mission: inbound } = dispatchInbound(engine, 'A')
     const outbound = readyOutbound(runtime, 'A')[0]
     matureAt(runtime, inbound.maturityTimeSec)
+    blockPileEntrance(runtime, 'A')
     runtime.attemptExchangerReleases()
     expect(stateOf(engine).exchangers.A).toMatchObject({ dropRobotId: outbound.robotId, dropBlocked: true })
     expect(missionState(engine, inbound.robotId)).toBe('QUEUED_FOR_DROP')

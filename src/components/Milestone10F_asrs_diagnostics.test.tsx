@@ -231,7 +231,7 @@ describe('Milestone 10F ASRS operations diagnostics', () => {
     const markup = render(state)
     expect(state.asrsRobotSystem.completedCycles).toHaveLength(0)
     expect(attr(markup, 'data-cancelled-count')).toBe('0')
-    expect(attr(markup, 'data-active-robot-count')).toBe('79')
+    expect(attr(markup, 'data-active-robot-count')).toBe('100')
   })
 
   test('existing control and material diagnostics remain present and balanced', () => {

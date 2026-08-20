@@ -3,19 +3,19 @@ import SimulationEngine from '../SimulationEngine'
 import type { SimulationStateWithProgress, Tray } from '../types'
 
 const SEGMENTS = [
-  { id: 'A1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'A1T', maxOccupancy: 24 },
+  { id: 'A1', lengthFt: 103.5, speedFtPerMin: 120, nextSegmentId: 'A1T', maxOccupancy: 45 },
   { id: 'A1T', lengthFt: 59, speedFtPerMin: 120, nextSegmentId: 'T' },
-  { id: 'B1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'B1T', maxOccupancy: 16 },
+  { id: 'B1', lengthFt: 86, speedFtPerMin: 120, nextSegmentId: 'B1T', maxOccupancy: 38 },
   { id: 'B1T', lengthFt: 44, speedFtPerMin: 120, nextSegmentId: 'T' },
-  { id: 'C1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'T', maxOccupancy: 16 },
+  { id: 'C1', lengthFt: 86, speedFtPerMin: 120, nextSegmentId: 'T', maxOccupancy: 38 },
   { id: 'T', lengthFt: 33, speedFtPerMin: 120, nextSegmentId: 'D', maxOccupancy: 12 },
-  { id: 'D', lengthFt: 235, speedFtPerMin: 120, maxOccupancy: 73 },
+  { id: 'D', lengthFt: 230, speedFtPerMin: 120, maxOccupancy: 92 },
 ]
 
 const PILE_GEOMETRY = {
-  A1: { upstreamMdrCount: 8, downstreamMdrCount: 15, beltLengthFt: 23.5 },
-  B1: { upstreamMdrCount: 8, downstreamMdrCount: 7, beltLengthFt: 43.5 },
-  C1: { upstreamMdrCount: 8, downstreamMdrCount: 7, beltLengthFt: 43.5 },
+  A1: { preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 15, beltLengthFt: 41 },
+  B1: { preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 8, beltLengthFt: 41 },
+  C1: { preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 8, beltLengthFt: 41 },
 } as const
 
 function createEngine() {
@@ -76,9 +76,13 @@ function assertValidPhysicalPlacement(state: SimulationStateWithProgress) {
     const placement = tray.pilePlacement
     expect(placement, `pile tray ${tray.id} has no physical placement`).toBeDefined()
     expect(placement!.pileId).toBe(pileId)
-    if (placement!.component === 'MDR_UPSTREAM') {
+    if (placement!.component === 'MDR_PRE_DETRAYER') {
       expect(placement!.zoneIndex).toBeGreaterThanOrEqual(0)
-      expect(placement!.zoneIndex).toBeLessThan(geometry.upstreamMdrCount)
+      expect(placement!.zoneIndex).toBeLessThan(geometry.preDetrayerMdrCount)
+      expect(placement!.beltPosFt).toBeUndefined()
+    } else if (placement!.component === 'MDR_POST_DETRAYER') {
+      expect(placement!.zoneIndex).toBeGreaterThanOrEqual(0)
+      expect(placement!.zoneIndex).toBeLessThan(geometry.postDetrayerMdrCount)
       expect(placement!.beltPosFt).toBeUndefined()
     } else if (placement!.component === 'MDR_DOWNSTREAM') {
       expect(placement!.zoneIndex).toBeGreaterThanOrEqual(0)
@@ -94,11 +98,13 @@ function assertValidPhysicalPlacement(state: SimulationStateWithProgress) {
 
 function pilePositionFt(tray: Tray): number {
   const placement = tray.pilePlacement!
-  const upstreamLength = 8 * 2.5
-  const beltLength = placement.pileId === 'A1' ? 23.5 : 43.5
-  if (placement.component === 'MDR_UPSTREAM') return ((placement.zoneIndex ?? 0) + 0.5) * 2.5
-  if (placement.component === 'BELT') return upstreamLength + (placement.beltPosFt ?? 0)
-  return upstreamLength + beltLength + ((placement.zoneIndex ?? 0) + 0.5) * 2.5
+  const preLength = 5 * 2.5
+  const postLength = 5 * 2.5
+  const beltLength = 41
+  if (placement.component === 'MDR_PRE_DETRAYER') return ((placement.zoneIndex ?? 0) + 0.5) * 2.5
+  if (placement.component === 'MDR_POST_DETRAYER') return preLength + ((placement.zoneIndex ?? 0) + 0.5) * 2.5
+  if (placement.component === 'BELT') return preLength + postLength + (placement.beltPosFt ?? 0)
+  return preLength + postLength + beltLength + ((placement.zoneIndex ?? 0) + 0.5) * 2.5
 }
 
 function assertNoPileOverlap(state: SimulationStateWithProgress) {
@@ -208,16 +214,23 @@ describe('Milestone 6A identity and material balance', () => {
 })
 
 describe('hybrid pile inter-segment entry', () => {
+  const occupyA1Entrance = (engine: SimulationEngine) => {
+    const runtime = engine as unknown as { trays: Tray[] }
+    const tray = runtime.trays.find((candidate) => candidate.pilePlacement?.pileId === 'A1')!
+    tray.pilePlacement = { pileId: 'A1', component: 'MDR_PRE_DETRAYER', zoneIndex: 0 }
+  }
+
   test('a segment transfer cannot enter an occupied hybrid-pile entrance', () => {
     const segmentsIntoA1 = SEGMENTS.map((segment) =>
       segment.id === 'C1' ? { ...segment, nextSegmentId: 'A1' } : segment,
     )
     const engine = new SimulationEngine(segmentsIntoA1)
     engine.reset()
+    occupyA1Entrance(engine)
     const initial = engine.getState()
     const c1FinalTray = initial.trays
       .filter((tray) => tray.pilePlacement?.pileId === 'C1' && tray.pilePlacement.component === 'MDR_DOWNSTREAM')
-      .find((tray) => tray.pilePlacement?.zoneIndex === 6)
+      .find((tray) => tray.pilePlacement?.zoneIndex === 7)
 
     expect(c1FinalTray).toBeDefined()
     engine.step(0.1)
@@ -235,10 +248,11 @@ describe('hybrid pile inter-segment entry', () => {
     )
     const engine = new SimulationEngine(segmentsIntoA1)
     engine.reset()
+    occupyA1Entrance(engine)
     const initial = engine.getState()
     const c1FinalTray = initial.trays
       .filter((tray) => tray.pilePlacement?.pileId === 'C1' && tray.pilePlacement.component === 'MDR_DOWNSTREAM')
-      .find((tray) => tray.pilePlacement?.zoneIndex === 6)!
+      .find((tray) => tray.pilePlacement?.zoneIndex === 7)!
     let state = initial
 
     while (state.timeSec < 120) {
@@ -250,7 +264,7 @@ describe('hybrid pile inter-segment entry', () => {
 
     const entered = state.trays.find((tray) => tray.id === c1FinalTray.id)
     expect(entered?.currentSegmentId).toBe('A1')
-    expect(entered?.pilePlacement).toEqual({ pileId: 'A1', component: 'MDR_UPSTREAM', zoneIndex: 0 })
+    expect(entered?.pilePlacement).toEqual({ pileId: 'A1', component: 'MDR_PRE_DETRAYER', zoneIndex: 0 })
     assertUniquePhysicalIdentity(state)
     assertMaterialBalance(state)
   })
