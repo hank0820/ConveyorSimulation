@@ -287,6 +287,6 @@ describe('ConveyorDiagram rendering integrity', () => {
     expect(markup).toContain('data-carton-state="ON_CONVEYOR"')
     expect(markup).not.toContain('data-carton-id')
     expect(new Set(attributeValues(markup, 'data-tray-id')).size).toBe(attributeValues(markup, 'data-tray-id').length)
-    expect(new Set(attributeValues(markup, 'data-zone-id')).size).toBe(attributeValues(markup, 'data-zone-id').length - 3)
+    expect(new Set(attributeValues(markup, 'data-zone-id')).size).toBe(attributeValues(markup, 'data-zone-id').length)
   })
 })
