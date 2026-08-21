@@ -168,7 +168,7 @@ Examples:
 - Trigger 6, quantity 10, and eight trays available freezes 8.
 - Trigger 6, quantity 10, and twelve trays available freezes 10.
 
-Authorization freezes the exact quantity and downstream-priority tray identities. Payload state does not exclude a physical tray. Later arrivals cannot join; D reopening or backup depth falling below the trigger does not cancel the batch; and physical PURGE blocking delays transfers without cancelling or resizing it. A qualifying T purge interrupts a blocked active A1/B1/C1 source batch. The same frozen source batch, including its identities, configured maximum, released count, and remaining count, resumes afterward.
+Authorization freezes the exact quantity and downstream-priority tray identities. Payload state does not exclude a physical tray. Later arrivals cannot join; D reopening or backup depth falling below the trigger does not cancel the batch; and physical PURGE blocking delays transfers without cancelling or resizing it. While a T purge batch is active, source authorization and source release are paused. The active source batch retains its exact source, configured maximum, authorized quantity, tray identities, released count, and remaining count. After T purge completion, that exact same source batch resumes without reconstruction or reauthorization.
 
 ## Milestone 12 operations sidebar
 
@@ -281,8 +281,9 @@ Both balance errors are exposed in diagnostics and remain zero in validated scen
 
 The latest completed Milestone 12 validation passed:
 
-- 381/381 deterministic tests across 34 files
+- 390/390 deterministic tests across 36 files
 - Focused Milestone 12A–12C tests
+- Direct interaction and regression coverage verifies draft-edit pause with live-state preservation, keyboard-operable sidebar disclosures, expansion-state persistence through playback, **Start Scenario**, and **Reset**, exact source-batch interruption and resumption, and prevention of duplicate T authorization
 - Lint passed
 - Standalone TypeScript compilation passed
 - Production build passed
