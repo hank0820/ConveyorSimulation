@@ -18,9 +18,9 @@ describe('SimulationControls panel', () => {
     const expanded = renderToStaticMarkup(createElement(SimulationControls, { ...common, collapsed: false }))
     const collapsed = renderToStaticMarkup(createElement(SimulationControls, { ...common, collapsed: true }))
     expect(expanded).toContain('data-panel-state="expanded"')
-    expect(expanded).toContain('Material')
-    expect(expanded).toContain('Outbound')
-    expect(expanded).toContain('Return')
+    expect(expanded).toContain('System Status / Accounting')
+    expect(expanded).toContain('Scenario Configuration')
+    expect(expanded).toContain('SRS Control Diagnostics')
     expect(collapsed).toContain('data-panel-state="collapsed"')
     expect(collapsed).not.toContain('class="panel-body"')
     expect(JSON.stringify(state)).toBe(frozen)
@@ -50,9 +50,9 @@ describe('SimulationControls panel', () => {
     ]).getState()
     const markup = renderToStaticMarkup(createElement(SimulationControls, {
       state, playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onStartScenario: vi.fn(),
-      onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, collapsed: false, onToggleCollapsed: vi.fn(),
+      onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, collapsed: false, onToggleCollapsed: vi.fn(), defaultOpenSections: ['srs-control'],
     }))
-    expect(markup).toContain('SRS demand control')
+    expect(markup).toContain('SRS Control Diagnostics')
     expect(markup).toContain('aria-label="PendingDemand planning cadence"')
     expect(markup).toContain('value="10"')
     expect(markup).toContain('Target / current')

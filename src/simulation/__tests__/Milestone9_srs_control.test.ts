@@ -257,7 +257,7 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
     expect(engine.getState().activeSlug?.source).toBe('B')
   })
 
-  test('T-full bypass freezes six downstream-most EMPTY identities and ignores FULL trays', () => {
+  test('T-full bypass freezes six downstream-most physical tray identities regardless of payload', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
     runtime.trays = [
@@ -265,11 +265,10 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
       zonedTray(50, 'D', 0),
     ]
     runtime.authorizePurgeIfNeeded()
-    expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([12, 10, 9, 8, 7, 6])
-    expect(runtime.activePurgeBatch?.authorizedTrayIds).not.toContain(11)
+    expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([12, 11, 10, 9, 8, 7])
     runtime.trays.push({ ...zonedTray(60, 'D', 0), currentSegmentId: 'A2', zonePlacement: undefined, inboundPlacement: { conveyorId: 'A2', component: 'MDR_SORTER_SIDE', zoneIndex: 0 } })
     runtime.authorizePurgeIfNeeded()
-    expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([12, 10, 9, 8, 7, 6])
+    expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([12, 11, 10, 9, 8, 7])
   })
 
   test('public KORBER-OFF cartbuild startup progresses through maturity, detraying, T bypass, and exact balances', () => {
@@ -277,7 +276,6 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
     engine.setOperatingSetting('korberEnabled', false)
     let sawMaturedRelease = false
     let sawDetraying = false
-    let sawFullT = false
     let sawBypass = false
     let sawPausedSource = false
     let sawResumedCompletion = false
@@ -287,7 +285,6 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
       const state = engine.getState()
       sawMaturedRelease ||= state.cartbuildSystem.cartbuildCartonsIntroduced > 0
       sawDetraying ||= Object.values(state.cartbuildSystem.detrayers).some((detrayer) => detrayer.splitCount > 0)
-      sawFullT ||= state.zonedOccupancy.T === 12 && !state.dEntranceAvailable
       if (sawMaturedRelease && state.srsControl.tBypassBatch.active) {
         sawBypass = true
         if (state.activeSlug) {
@@ -299,10 +296,10 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
       expect(state.materialBalanceError).toBe(0)
       expect(state.cartbuildSystem.cartonBalanceError).toBe(0)
       expect(new Set(state.trays.map((tray) => tray.id)).size).toBe(state.trays.length)
-      if (sawMaturedRelease && sawDetraying && sawFullT && sawBypass && sawPausedSource && sawResumedCompletion) break
+      if (sawMaturedRelease && sawDetraying && sawBypass && sawPausedSource && sawResumedCompletion) break
     }
-    expect({ sawMaturedRelease, sawDetraying, sawFullT, sawBypass, sawPausedSource, sawResumedCompletion }).toEqual({
-      sawMaturedRelease: true, sawDetraying: true, sawFullT: true, sawBypass: true, sawPausedSource: true, sawResumedCompletion: true,
+    expect({ sawMaturedRelease, sawDetraying, sawBypass, sawPausedSource, sawResumedCompletion }).toEqual({
+      sawMaturedRelease: true, sawDetraying: true, sawBypass: true, sawPausedSource: true, sawResumedCompletion: true,
     })
   }, 30_000)
 })

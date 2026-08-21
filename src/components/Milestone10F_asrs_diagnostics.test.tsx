@@ -56,7 +56,7 @@ const inbound = (source: SourceId, robotId: number, lifecycleState: InboundRobot
 
 const render = (state: SimulationStateWithProgress, collapsed = false) => renderToStaticMarkup(createElement(SimulationControls, {
   state, playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onStartScenario: vi.fn(),
-  onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, collapsed, onToggleCollapsed: vi.fn(),
+  onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, collapsed, onToggleCollapsed: vi.fn(), defaultOpenSections: ['srs-control', 'asrs-robots', 'exchanger-a', 'exchanger-b', 'exchanger-c'],
 }))
 const attr = (markup: string, name: string) => markup.match(new RegExp(`${name}="([^"]*)"`))?.[1]
 const card = (markup: string, source: SourceId) => markup.match(new RegExp(`<article[^>]*data-exchanger-id="${source}"[\\s\\S]*?</article>`))?.[0] ?? ''
@@ -236,8 +236,8 @@ describe('Milestone 10F ASRS operations diagnostics', () => {
 
   test('existing control and material diagnostics remain present and balanced', () => {
     const markup = render(engine().getState())
-    for (const heading of ['Process enablement', 'SRS demand control', 'Simulation', 'Material', 'Outbound', 'Return', 'Cartbuild']) expect(markup).toContain(heading)
-    expect(markup).toContain('Balance</span><span class="value ok">0')
+    for (const heading of ['Simulation', 'Scenario Configuration', 'Process enablement', 'System Status / Accounting', 'SRS Control Diagnostics', 'ASRS Robot Diagnostics', 'Exchanger A', 'Exchanger B', 'Exchanger C']) expect(markup).toContain(heading)
+    expect(markup).toContain('Tray balance</span><span class="value ok">0')
     expect(markup).toContain('Carton balance</span><span class="value ok">0')
   })
 })

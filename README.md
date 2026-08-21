@@ -4,9 +4,16 @@ A deterministic React and TypeScript model of a three-source conveyor system wit
 
 ## Milestone status
 
-Milestone 11 is implemented and validated. It builds on Milestone 10's cartbuild reservations, ASRS robots, exchanger queues, exact inbound reservations, and dual-cycle behavior without redesigning logical routing or control priority.
+Milestone 12 is implemented and validated. It extends Milestone 11's refined conveyor topology with configurable source-release and T-purge controls plus a reorganized operations sidebar, without changing conveyor geometry, routing, timing, robot behavior, or accounting.
 
-Milestone 11 delivers:
+Milestone 12 delivers:
+
+- Independent configurable A1/B1/C1 maximum source-release quantities
+- A configurable consecutive downstream T backup trigger and T-to-PURGE quantity
+- Selected-versus-active scenario controls with atomic time-zero application
+- An accessible eight-section operations sidebar with concise defaults and retained diagnostics
+
+Milestone 11 delivered the underlying topology retained by Milestone 12:
 
 - Refined outbound A1/B1/C1 physical composition and detrayer placement
 - Updated shared-conveyor zone counts
@@ -40,7 +47,7 @@ A blocked downstream MDR zone 0 stops the whole belt and rejects new belt entry.
 | `X` | 4 | 10 ft |
 | `S` | 8 | 20 ft |
 
-A1 and B1 merge onto `PRE_T`; C1 enters `T` directly. `PURGE` remains the section name and has 12 physical zones, while its frozen physical T-bypass batch remains exactly six trays. Existing source-batch priority, slug control, T arbitration, E-over-PURGE merge priority, and return-sorter routing are unchanged.
+A1 and B1 merge onto `PRE_T`; C1 enters `T` directly. `PURGE` remains the section name and has 12 physical zones. Milestone 12 makes the T-to-PURGE trigger and frozen batch quantity configurable; existing T arbitration, E-over-PURGE merge priority, and return-sorter routing are unchanged.
 
 Körber processes the tray in D's final physical zone 91 at 1,050 trays/hour. Processing preserves tray identity and changes `EMPTY` to `FULL`. If E zone 0 is unavailable, exactly one processed tray remains held at the Körber discharge and blocks further processing until it can enter E.
 
@@ -76,7 +83,9 @@ The operations panel exposes selected scenario targets separately from the activ
 
 Inputs accept integers from 1 through 999. Blank, nonnumeric, fractional, out-of-range, or otherwise invalid drafts remain visible, display validation, and disable **Start Scenario**. Editing pauses playback but does not reset the simulation or alter active engine targets. When selected and active values differ, the UI displays **Apply with Start Scenario**.
 
-**Start Scenario** atomically applies valid selected targets, selected operating toggles, and the planning cadence; clears prior physical and control state; initializes the new scenario at time zero; and runs immediate planning exactly once. **Reset** restores all eight target defaults, all four operating toggles to ON, the ten-second planning cadence, and deterministic default initialization.
+SRS targets, source-release quantities, the T backup trigger, T purge quantity, operating toggles, and planning cadence are scenario settings. Editable selected values remain separate from the active values used by the engine. Editing any draft pauses playback while preserving current material, missions, robots, batches, timing, and accounting. Invalid drafts remain visible, show inline validation, and disable **Start Scenario**.
+
+**Start Scenario** atomically applies every valid selected setting; clears prior physical and control state; initializes the new scenario at time zero; and runs immediate planning exactly once. **Reset** restores all eight SRS target defaults, A1/B1/C1 source quantities to 8/8/8, both T settings to 6/6, all four operating toggles to ON, the ten-second planning cadence, and deterministic material, mission, and robot initialization.
 
 ### Target-based initialization
 
@@ -112,7 +121,71 @@ Lane release pressure remains:
 lanePurgeDemand = CurrentCount - TargetSize + PendingDemand
 ```
 
-Lane `PurgeDemand` is a signed SRS control quantity and is distinct from the frozen six-tray physical T-bypass batch.
+Lane `PurgeDemand` is a signed SRS control quantity and is distinct from the configurable frozen physical T-to-PURGE batch.
+
+## Milestone 12 release controls
+
+### Configurable A1/B1/C1 source batches
+
+The Release Control group exposes independent maximum source authorizations:
+
+| Source | Default | Valid range |
+|---|---:|---:|
+| A1 | 8 trays | 1–45 |
+| B1 | 8 trays | 1–38 |
+| C1 | 8 trays | 1–38 |
+
+For positive lane `PurgeDemand`, authorization is:
+
+```text
+authorized source quantity =
+  min(positive PurgeDemand, active configured source quantity, physically available source trays)
+```
+
+When D is available and lane `PurgeDemand` is not positive:
+
+```text
+authorized source quantity =
+  min(active configured source quantity, physically available source trays)
+```
+
+This is a maximum, so existing partial-batch behavior remains. Authorization freezes the exact quantity and tray identities; later arrivals cannot join. A frozen source batch finishes before source arbitration is recalculated. Source selection priority remains highest positive `PurgeDemand`, then a physically full source, then round-robin tie resolution.
+
+### Configurable T-to-PURGE batches
+
+The T backup trigger defaults to 6 zones, and the T purge quantity defaults to 6 trays. Both accept positive integers from 1 through 12. The purge-quantity maximum is derived from the smaller physical capacity of T and PURGE.
+
+Backup depth is consecutive physical occupancy measured upstream from D, beginning at T's D-facing end. It is not arbitrary or total T occupancy. A new T purge batch requires D entrance to be blocked, the active configured consecutive downstream backup depth to be reached, and no existing T purge batch to be active.
+
+```text
+frozen T purge quantity =
+  min(active configured T purge quantity, trays physically available in T)
+```
+
+Examples:
+
+- Trigger 6, quantity 10, and six trays available freezes 6.
+- Trigger 6, quantity 10, and eight trays available freezes 8.
+- Trigger 6, quantity 10, and twelve trays available freezes 10.
+
+Authorization freezes the exact quantity and downstream-priority tray identities. Payload state does not exclude a physical tray. Later arrivals cannot join; D reopening or backup depth falling below the trigger does not cancel the batch; and physical PURGE blocking delays transfers without cancelling or resizing it. While a T purge batch is active, source authorization and source release are paused. The active source batch retains its exact source, configured maximum, authorized quantity, tray identities, released count, and remaining count. After T purge completion, that exact same source batch resumes without reconstruction or reauthorization.
+
+## Milestone 12 operations sidebar
+
+The right sidebar is ordered as follows:
+
+1. **Simulation** — open
+2. **Scenario Configuration** — open
+3. **System Status / Accounting** — open
+4. **SRS Control Diagnostics** — collapsed
+5. **ASRS Robot Diagnostics** — collapsed
+6. **Exchanger A** — collapsed
+7. **Exchanger B** — collapsed
+8. **Exchanger C** — collapsed
+
+Simulation controls are immediately available at the top. Scenario Configuration contains all selected-versus-active inputs, validation, and apply guidance. System Status presents concise runtime, mission, material, and accounting totals. Detailed controller, ASRS robot, and independent A/B/C exchanger diagnostics remain fully available but initially collapsed; ASRS robot simulation and visualization are unchanged.
+
+Each section is independently keyboard-expandable. Expansion is presentation-only: playback, **Start Scenario**, **Reset**, and ordinary simulation rerenders preserve the user's choices. A fresh page or component mount restores the documented defaults.
 
 ## Cartbuild and scenario controls
 
@@ -127,7 +200,7 @@ committedCartbuildPositions =
 
 Each cartbuild operator consumes from its final zone at no more than 450 cartons/hour. A `CARTBUILD` mission requires both SRS capacity and cartbuild capacity. If cartbuild capacity is exhausted and Körber is enabled, planning may select `EMPTY`; failed mission creation consumes no robot, tray, carton, reservation, or exchanger cadence.
 
-The operations panel exposes `KORBER`, `CARTBUILD_A`, `CARTBUILD_B`, and `CARTBUILD_C`. Changing a toggle pauses playback but preserves the current engine state; the new value affects future eligibility without discarding pending or in-flight work.
+Scenario Configuration exposes `KORBER`, `CARTBUILD_A`, `CARTBUILD_B`, and `CARTBUILD_C`. Changing a toggle pauses playback but preserves the current engine state; the new value affects future eligibility without discarding pending or in-flight work.
 
 ## Milestone 10 ASRS robots and dual cycles
 
@@ -167,15 +240,15 @@ Elevation, real spiral pitch, diameter, and exact revolutions are not simulated.
 
 ## Routing and control behavior retained from earlier milestones
 
-Milestone 11 does not change:
+Milestones 11 and 12 do not change:
 
 - Körber processing rate
 - Cartbuild operator rates
 - Shared eight-second exchanger cadence
 - Robot retrieval, DROP-to-TAKE, or ten-second return timing
 - Dual-cycle and cancellation rules
-- Source-batch priority and frozen membership
-- Six-tray T-bypass quantity
+- Source-batch priority and frozen-membership guarantees
+- T-to-PURGE downstream-priority ordering and frozen-membership guarantees
 - E-over-PURGE merge priority
 - A2 → B2 → C2 return-sorter order
 - Material-accounting definitions
@@ -206,16 +279,17 @@ Both balance errors are exposed in diagnostics and remain zero in validated scen
 
 ## Validation status
 
-The latest committed Milestone 11 validation passed:
+The latest completed Milestone 12 validation passed:
 
-- 324/324 deterministic tests across 27 files
-- Focused Milestone 11A–11D tests
-- Lint
-- Standalone TypeScript compilation
-- Production build
-- Tray and carton balance assertions
+- 390/390 deterministic tests across 36 files
+- Focused Milestone 12A–12C tests
+- Direct interaction and regression coverage verifies draft-edit pause with live-state preservation, keyboard-operable sidebar disclosures, expansion-state persistence through playback, **Start Scenario**, and **Reset**, exact source-batch interruption and resumption, and prevention of duplicate T authorization
+- Lint passed
+- Standalone TypeScript compilation passed
+- Production build passed
+- `git diff --check` passed
+- Tray and carton balance assertions remained exact
 - No skipped or pending tests
-- Manual desktop visualization acceptance at 1920 × 1080 and 1366 × 768
 
 After a computer restart, contention-safe non-overlapping test batches were used once to cover the complete suite under each test's committed timeout configuration. The same full suite also passed with one worker. This was validation-environment contention, not a product defect.
 
@@ -232,7 +306,7 @@ npm run build
 Standalone type-check:
 
 ```bash
-npx tsc --noEmit
+npx tsc -b
 ```
 
 ## Known limitations and backlog
@@ -247,6 +321,7 @@ The following capabilities are not implemented:
 - Scanner behavior
 - Order grouping and carton metadata
 - Returned-tray reintroduction through an explicit lifecycle
-- Scenario saving and sharing
-- Deployment for teams and vendors
+- Scenario file saving, import, and export
+- Authentication and collaboration controls
+- Hosting or deployment for teams, vendors, and external sharing
 - Exact elevation and physical spiral geometry
