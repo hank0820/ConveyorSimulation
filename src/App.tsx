@@ -9,6 +9,7 @@ import type { OperatingSettings } from './simulation/types'
 import type { SourceId, SrsPileId } from './simulation/types'
 import { defaultSrsTargetDrafts, parseSrsTargetDrafts, targetsAreDirty } from './srsTargetDrafts'
 import { defaultSourceReleaseDrafts, parseSourceReleaseDrafts, sourceReleasesAreDirty } from './sourceReleaseDrafts'
+import { defaultTPurgeDrafts, parseTPurgeDrafts, tPurgeDraftsAreDirty } from './tPurgeDrafts'
 
 const SEGMENTS = [
   { id: 'A1', lengthFt: 103.5, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 45 },
@@ -38,10 +39,14 @@ function App() {
   const [configurationNotice, setConfigurationNotice] = useState<string | null>(null)
   const [selectedTargets, setSelectedTargets] = useState(defaultSrsTargetDrafts)
   const [selectedSourceReleases, setSelectedSourceReleases] = useState(defaultSourceReleaseDrafts)
+  const [selectedTPurge, setSelectedTPurge] = useState(defaultTPurgeDrafts)
   const targetValidation = parseSrsTargetDrafts(selectedTargets)
   const sourceReleaseValidation = parseSourceReleaseDrafts(selectedSourceReleases)
+  const tPurgeMaximum = Math.min(state.segments.find(({ id }) => id === 'T')?.maxOccupancy ?? 12, state.segments.find(({ id }) => id === 'PURGE')?.maxOccupancy ?? 12)
+  const tPurgeValidation = parseTPurgeDrafts(selectedTPurge, tPurgeMaximum)
   const targetsDirty = targetsAreDirty(selectedTargets, state.srsControl.targets)
   const sourceReleasesDirty = sourceReleasesAreDirty(selectedSourceReleases, state.srsControl.sourceReleaseQuantities)
+  const tPurgeDirty = tPurgeDraftsAreDirty(selectedTPurge, state.srsControl.tPurgeSettings)
 
   // animation loop
   useEffect(() => {
@@ -88,6 +93,7 @@ function App() {
     setConfigurationNotice(null)
     setSelectedTargets(defaultSrsTargetDrafts())
     setSelectedSourceReleases(defaultSourceReleaseDrafts())
+    setSelectedTPurge(defaultTPurgeDrafts())
   }
 
   function handleOperatingSetting(setting: keyof OperatingSettings, enabled: boolean) {
@@ -99,7 +105,7 @@ function App() {
   }
 
   function handleStartScenario() {
-    if (!targetValidation.targets || !sourceReleaseValidation.quantities) return
+    if (!targetValidation.targets || !sourceReleaseValidation.quantities || !tPurgeValidation.settings) return
     applyStartScenario(
       engineRef.current,
       state.operatingSettings,
@@ -109,12 +115,18 @@ function App() {
       setConfigurationNotice,
       targetValidation.targets,
       sourceReleaseValidation.quantities,
+      tPurgeValidation.settings,
     )
   }
 
   function handleSourceReleaseChange(source: SourceId, value: string) {
     setPlaying(false)
     setSelectedSourceReleases((drafts) => ({ ...drafts, [source]: value }))
+  }
+
+  function handleTPurgeChange(field: 'backupTrigger' | 'purgeQuantity', value: string) {
+    setPlaying(false)
+    setSelectedTPurge((drafts) => ({ ...drafts, [field]: value }))
   }
 
   function handleTargetChange(pile: SrsPileId, value: string) {
@@ -155,6 +167,11 @@ function App() {
         sourceReleaseErrors={sourceReleaseValidation.errors}
         sourceReleasesDirty={sourceReleasesDirty}
         onSourceReleaseChange={handleSourceReleaseChange}
+        selectedTPurge={selectedTPurge}
+        tPurgeErrors={tPurgeValidation.errors}
+        tPurgeDirty={tPurgeDirty}
+        tPurgeMaximum={tPurgeMaximum}
+        onTPurgeChange={handleTPurgeChange}
         onOperatingSettingChange={handleOperatingSetting}
         onPlanningCadenceChange={handlePlanningCadence}
         configurationNotice={configurationNotice}

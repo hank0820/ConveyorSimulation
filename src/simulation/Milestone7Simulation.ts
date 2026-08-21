@@ -22,11 +22,13 @@ import type {
   SourceState,
   SrsPileId,
   SrsTargets,
+  TPurgeSettings,
   Tray,
   TrayLoadState,
 } from './types'
 import { DEFAULT_SRS_TARGETS, validateSrsTargets } from './srsTargets'
 import { DEFAULT_SOURCE_RELEASE_QUANTITIES, validateSourceReleaseQuantities } from './sourceReleaseSettings'
+import { DEFAULT_T_PURGE_SETTINGS, validateTPurgeSettings } from './tPurgeSettings'
 
 const EPS = 1e-9
 const ZONE_LENGTH_FT = 2.5
@@ -150,6 +152,7 @@ export default class Milestone7Simulation {
   private planningCadenceSec = DEFAULT_PLANNING_CADENCE_SEC
   private activeTargets: SrsTargets = { ...DEFAULT_SRS_TARGETS }
   private activeSourceReleaseQuantities: SourceReleaseQuantities = { ...DEFAULT_SOURCE_RELEASE_QUANTITIES }
+  private activeTPurgeSettings: Readonly<TPurgeSettings> = { ...DEFAULT_T_PURGE_SETTINGS }
   private nextPlanningTime = 0
   private asrsAssigned: Record<SourceId, number> = { A: 0, B: 0, C: 0 }
   private asrsLastRelease: Record<SourceId, number> = { A: -1e9, B: -1e9, C: -1e9 }
@@ -213,17 +216,20 @@ export default class Milestone7Simulation {
   }
 
   reset() {
-    this.initialize(DEFAULT_SETTINGS(), DEFAULT_PLANNING_CADENCE_SEC, DEFAULT_SRS_TARGETS, DEFAULT_SOURCE_RELEASE_QUANTITIES)
+    this.initialize(DEFAULT_SETTINGS(), DEFAULT_PLANNING_CADENCE_SEC, DEFAULT_SRS_TARGETS, DEFAULT_SOURCE_RELEASE_QUANTITIES, DEFAULT_T_PURGE_SETTINGS)
   }
 
-  startScenario(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets = DEFAULT_SRS_TARGETS, sourceReleaseQuantities: SourceReleaseQuantities = DEFAULT_SOURCE_RELEASE_QUANTITIES) {
+  startScenario(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets = DEFAULT_SRS_TARGETS, sourceReleaseQuantities: SourceReleaseQuantities = DEFAULT_SOURCE_RELEASE_QUANTITIES, tPurgeSettings: TPurgeSettings = DEFAULT_T_PURGE_SETTINGS) {
     if (!Number.isFinite(planningCadenceSec) || planningCadenceSec <= 0) throw new Error('PendingDemand planning cadence must be a positive finite number')
-    this.initialize(settings, planningCadenceSec, targets, sourceReleaseQuantities)
+    this.initialize(settings, planningCadenceSec, targets, sourceReleaseQuantities, tPurgeSettings)
   }
 
-  private initialize(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets, sourceReleaseQuantities: SourceReleaseQuantities) {
+  private initialize(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets, sourceReleaseQuantities: SourceReleaseQuantities, tPurgeSettings: TPurgeSettings) {
     this.activeTargets = validateSrsTargets(targets)
     this.activeSourceReleaseQuantities = validateSourceReleaseQuantities(sourceReleaseQuantities)
+    const tCapacity = this.segments.find(({ id }) => id === 'T')?.maxOccupancy ?? ZONE_COUNTS.T
+    const purgeCapacity = this.segments.find(({ id }) => id === 'PURGE')?.maxOccupancy ?? ZONE_COUNTS.PURGE
+    this.activeTPurgeSettings = validateTPurgeSettings(tPurgeSettings, Math.min(tCapacity, purgeCapacity))
     this.timeSec = 0
     this.trays = []
     this.totalTraysCreated = 0
@@ -547,17 +553,23 @@ export default class Milestone7Simulation {
     if (!this.returnEnabled || this.activePurgeBatch) return
     const t = this.zonedOccupancy('T')
     const dBlocked = Boolean(this.zonedOccupancy('D')[0])
-    if (!dBlocked || t.filter(Boolean).length !== ZONE_COUNTS.T || this.zonedOccupancy('PURGE')[0]) return
-    const selected = t.filter((tray): tray is Tray => Boolean(tray && (tray.loadState ?? 'EMPTY') === 'EMPTY'))
+    if (!dBlocked || this.consecutiveDownstreamTBackupDepth(t) < this.activeTPurgeSettings.backupTrigger) return
+    const selected = t.filter((tray): tray is Tray => Boolean(tray))
       .sort((a, b) => b.zonePlacement!.zoneIndex - a.zonePlacement!.zoneIndex)
-      .slice(0, 6)
-    if (selected.length !== 6) return
+      .slice(0, this.activeTPurgeSettings.purgeQuantity)
+    if (!selected.length) return
     this.activePurgeBatch = {
-      authorizedTrayIds: selected.map((tray) => tray.id), authorizedCount: 6,
+      authorizedTrayIds: selected.map((tray) => tray.id), authorizedCount: selected.length,
       divertedCount: 0, enteredPurgeCount: 0, authorizedAtSec: this.timeSec,
       completedAtSec: null, status: 'ACTIVE',
     }
     for (const tray of selected) tray.purgeMember = true
+  }
+
+  private consecutiveDownstreamTBackupDepth(t = this.zonedOccupancy('T')) {
+    let depth = 0
+    for (let index = ZONE_COUNTS.T - 1; index >= 0 && t[index]; index--) depth += 1
+    return depth
   }
 
   private processReturnBoundaries() {
@@ -1557,14 +1569,18 @@ export default class Milestone7Simulation {
         cartonBalanceError: cartonIntroduced - cartonAttached - cartonOnConveyors - cartonConsumed,
       },
       srsControl: {
-        targets: { ...this.activeTargets }, sourceReleaseQuantities: { ...this.activeSourceReleaseQuantities }, current: { ...srsCurrent }, globalTarget: this.globalTarget(), globalCurrent: srsGlobalCurrent,
+        targets: { ...this.activeTargets }, sourceReleaseQuantities: { ...this.activeSourceReleaseQuantities }, tPurgeSettings: { ...this.activeTPurgeSettings }, current: { ...srsCurrent }, globalTarget: this.globalTarget(), globalCurrent: srsGlobalCurrent,
         globalPending: srsGlobalPending, globalAvailableCapacity: srsGlobalAvailable, planningCadenceSec: this.planningCadenceSec,
         nextPlanningTime: this.nextPlanningTime, planningCursor: this.asrsNextAssign, lanes: srsLanes,
         tBypassBatch: {
-          active: Boolean(this.activePurgeBatch), authorizedTrayIds: [...(this.activePurgeBatch?.authorizedTrayIds ?? [])],
+          active: Boolean(this.activePurgeBatch), consecutiveDownstreamBackupDepth: this.consecutiveDownstreamTBackupDepth(),
+          dEntranceBlocked: Boolean(this.zonedOccupancy('D')[0]),
+          triggerQualifies: Boolean(this.zonedOccupancy('D')[0]) && this.consecutiveDownstreamTBackupDepth() >= this.activeTPurgeSettings.backupTrigger && !this.activePurgeBatch,
+          authorizedTrayIds: [...(this.activePurgeBatch?.authorizedTrayIds ?? [])],
           enteredCount: this.activePurgeBatch?.enteredPurgeCount ?? 0,
           remainingCount: this.activePurgeBatch ? this.activePurgeBatch.authorizedCount - this.activePurgeBatch.enteredPurgeCount : 0,
           sourceBatchPaused: Boolean(this.activeSlug && this.activePurgeBatch),
+          pausedSource: this.activeSlug && this.activePurgeBatch ? this.activeSlug.source : null,
         },
       },
       returnSystem: {
@@ -1573,7 +1589,7 @@ export default class Milestone7Simulation {
         korberHeldTrayId: this.trays.find((tray) => tray.korberHeld)?.id ?? null,
         returnedToAsrsCount,
         returnedHistory: this.returnedHistory.map((record) => ({ ...record })),
-        purgeTriggerReady: this.returnEnabled && this.zonedOccupancy('T').filter(Boolean).length === ZONE_COUNTS.T && Boolean(this.zonedOccupancy('D')[0]) && !this.activePurgeBatch,
+        purgeTriggerReady: this.returnEnabled && Boolean(this.zonedOccupancy('D')[0]) && this.consecutiveDownstreamTBackupDepth() >= this.activeTPurgeSettings.backupTrigger && !this.activePurgeBatch,
         activePurgeBatch: this.activePurgeBatch ? { ...this.activePurgeBatch, authorizedTrayIds: [...this.activePurgeBatch.authorizedTrayIds] } : null,
         lastCompletedPurgeBatch: this.lastCompletedPurgeBatch ? { ...this.lastCompletedPurgeBatch, authorizedTrayIds: [...this.lastCompletedPurgeBatch.authorizedTrayIds] } : null,
         sorterCursor: this.sorterCursor,

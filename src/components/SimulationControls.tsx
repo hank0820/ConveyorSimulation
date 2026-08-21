@@ -2,6 +2,7 @@ import type { FC, ReactNode } from 'react'
 import type { OperatingSettings, SimulationStateWithProgress, SourceId, SrsPileId } from '../simulation/types'
 import type { SrsTargetDrafts } from '../srsTargetDrafts'
 import type { SourceReleaseDrafts } from '../sourceReleaseDrafts'
+import type { TPurgeDrafts } from '../tPurgeDrafts'
 import { SRS_TARGET_PILES } from '../simulation/srsTargets'
 
 interface Props {
@@ -21,6 +22,11 @@ interface Props {
   sourceReleaseErrors?: Partial<Record<SourceId, string>>
   sourceReleasesDirty?: boolean
   onSourceReleaseChange?: (source: SourceId, value: string) => void
+  selectedTPurge?: TPurgeDrafts
+  tPurgeErrors?: Partial<Record<keyof TPurgeDrafts, string>>
+  tPurgeDirty?: boolean
+  tPurgeMaximum?: number
+  onTPurgeChange?: (field: keyof TPurgeDrafts, value: string) => void
   onOperatingSettingChange: (setting: keyof OperatingSettings, enabled: boolean) => void
   onPlanningCadenceChange: (seconds: number) => void
   configurationNotice: string | null
@@ -93,7 +99,7 @@ const abbreviatedTrayId = (id: number | null) => id === null ? '—' : `T${Strin
 const secondsText = (seconds: number | null) => seconds === null ? '—' : `${seconds.toFixed(1)}s`
 
 const SimulationControls: FC<Props> = ({
-  state, playing, playbackSpeed, setPlaybackSpeed, onPlayPause, onStep, onReset, onStartScenario, selectedTargets, targetErrors = {}, targetsDirty = false, onTargetChange, selectedSourceReleases, sourceReleaseErrors = {}, sourceReleasesDirty = false, onSourceReleaseChange, onOperatingSettingChange, onPlanningCadenceChange, configurationNotice, collapsed, onToggleCollapsed,
+  state, playing, playbackSpeed, setPlaybackSpeed, onPlayPause, onStep, onReset, onStartScenario, selectedTargets, targetErrors = {}, targetsDirty = false, onTargetChange, selectedSourceReleases, sourceReleaseErrors = {}, sourceReleasesDirty = false, onSourceReleaseChange, selectedTPurge, tPurgeErrors = {}, tPurgeDirty = false, tPurgeMaximum = 12, onTPurgeChange, onOperatingSettingChange, onPlanningCadenceChange, configurationNotice, collapsed, onToggleCollapsed,
 }) => {
   const purge = state.returnSystem.activePurgeBatch
   const frozenIds = purge?.authorizedTrayIds ?? state.returnSystem.lastCompletedPurgeBatch?.authorizedTrayIds ?? []
@@ -130,9 +136,13 @@ const SimulationControls: FC<Props> = ({
             <legend>Release Control</legend>
             <small>Maximum frozen batch released toward T/PRE_T.</small>
             {(['A', 'B', 'C'] as SourceId[]).map((source) => <label key={source}><span>{source}1 batch quantity</span><input aria-label={`${source}1 batch quantity`} aria-invalid={Boolean(sourceReleaseErrors[source])} aria-describedby={sourceReleaseErrors[source] ? `${source}-release-error` : undefined} type="number" min="1" max={source === 'A' ? '45' : '38'} step="1" value={selectedSourceReleases[source]} onChange={(event) => onSourceReleaseChange?.(source, event.currentTarget.value)} /><small>Active: {state.srsControl.sourceReleaseQuantities[source]}</small>{sourceReleaseErrors[source] && <small id={`${source}-release-error`} role="alert">{sourceReleaseErrors[source]}</small>}</label>)}
+            {selectedTPurge && <>
+              <label><span>T backup trigger</span><input aria-label="T backup trigger" aria-invalid={Boolean(tPurgeErrors.backupTrigger)} type="number" min="1" max="12" step="1" value={selectedTPurge.backupTrigger} onChange={(event) => onTPurgeChange?.('backupTrigger', event.currentTarget.value)} /><small>Active: {state.srsControl.tPurgeSettings.backupTrigger}. Consecutive occupied T zones measured upstream from D while D is blocked. {state.srsControl.tPurgeSettings.backupTrigger} means the {state.srsControl.tPurgeSettings.backupTrigger} T zones nearest D must be occupied.</small>{tPurgeErrors.backupTrigger && <small role="alert">{tPurgeErrors.backupTrigger}</small>}</label>
+              <label><span>T purge quantity</span><input aria-label="T purge quantity" aria-invalid={Boolean(tPurgeErrors.purgeQuantity)} type="number" min="1" max={tPurgeMaximum} step="1" value={selectedTPurge.purgeQuantity} onChange={(event) => onTPurgeChange?.('purgeQuantity', event.currentTarget.value)} /><small>Active: {state.srsControl.tPurgeSettings.purgeQuantity}. Maximum frozen batch released from T into PURGE.</small>{tPurgeErrors.purgeQuantity && <small role="alert">{tPurgeErrors.purgeQuantity}</small>}</label>
+            </>}
           </fieldset>}
-          <button className="start-scenario-button" type="button" disabled={Object.keys(targetErrors).length > 0 || Object.keys(sourceReleaseErrors).length > 0} onClick={onStartScenario}>Start Scenario</button>
-          {(targetsDirty || sourceReleasesDirty) && <p className="configuration-notice" role="status">Configuration edits are selected only. Apply with Start Scenario.</p>}
+          <button className="start-scenario-button" type="button" disabled={Object.keys(targetErrors).length > 0 || Object.keys(sourceReleaseErrors).length > 0 || Object.keys(tPurgeErrors).length > 0} onClick={onStartScenario}>Start Scenario</button>
+          {(targetsDirty || sourceReleasesDirty || tPurgeDirty) && <p className="configuration-notice" role="status">Configuration edits are selected only. Apply with Start Scenario.</p>}
           {configurationNotice && <p className="configuration-notice" role="status">{configurationNotice}</p>}
         </section>
 
@@ -173,11 +183,15 @@ const SimulationControls: FC<Props> = ({
             </ul>
           </details>
           <details data-t-bypass>
-            <summary>{`T bypass · ${state.srsControl.tBypassBatch.active ? 'ACTIVE' : 'IDLE'} · ${state.srsControl.tBypassBatch.enteredCount}/6 entered`}</summary>
+            <summary>{`T bypass · ${state.srsControl.tBypassBatch.active ? 'ACTIVE' : 'IDLE'} · ${state.srsControl.tBypassBatch.enteredCount}/${state.srsControl.tPurgeSettings.purgeQuantity} entered`}</summary>
             <ul className="detail-list">
+              <li>Downstream backup depth: {state.srsControl.tBypassBatch.consecutiveDownstreamBackupDepth}</li>
+              <li>D entrance blocked: {state.srsControl.tBypassBatch.dEntranceBlocked ? 'YES' : 'NO'}</li>
+              <li>Trigger qualifies: {state.srsControl.tBypassBatch.triggerQualifies ? 'YES' : 'NO'}</li>
               <li>Frozen IDs: {state.srsControl.tBypassBatch.authorizedTrayIds.length ? state.srsControl.tBypassBatch.authorizedTrayIds.join(', ') : 'none'}</li>
               <li>Remaining: {state.srsControl.tBypassBatch.remainingCount}</li>
               <li>Source paused: {state.srsControl.tBypassBatch.sourceBatchPaused ? 'YES' : 'NO'}</li>
+              <li>Paused source: {state.srsControl.tBypassBatch.pausedSource ?? 'none'}</li>
             </ul>
           </details>
         </section>

@@ -1,5 +1,5 @@
 import SimulationEngine from './simulation/SimulationEngine'
-import type { OperatingSettings, SimulationStateWithProgress, SourceReleaseQuantities, SrsTargets } from './simulation/types'
+import type { OperatingSettings, SimulationStateWithProgress, SourceReleaseQuantities, SrsTargets, TPurgeSettings } from './simulation/types'
 
 export function applyOperatingSettingChange(
   engine: SimulationEngine,
@@ -38,9 +38,10 @@ export function applyStartScenario(
   publishNotice: (notice: string) => void,
   targets?: SrsTargets,
   sourceReleaseQuantities?: SourceReleaseQuantities,
+  tPurgeSettings?: TPurgeSettings,
 ) {
   pause()
-  engine.startScenario(settings, planningCadenceSec, targets, sourceReleaseQuantities)
+  engine.startScenario(settings, planningCadenceSec, targets, sourceReleaseQuantities, tPurgeSettings)
   publishState(engine.getState())
   publishNotice('Scenario started from selected settings')
 }

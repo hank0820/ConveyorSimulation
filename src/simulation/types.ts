@@ -325,6 +325,10 @@ export interface CompletedOutboundCycle {
 export type SrsPileId = 'A1' | 'B1' | 'C1' | 'T' | 'D' | 'A2' | 'B2' | 'C2'
 export type SrsTargets = Readonly<Record<SrsPileId, number>>
 export type SourceReleaseQuantities = Readonly<Record<SourceId, number>>
+export interface TPurgeSettings {
+  backupTrigger: number
+  purgeQuantity: number
+}
 
 export interface SrsLaneDiagnostic {
   source: SourceId
@@ -352,6 +356,7 @@ export interface SrsLaneDiagnostic {
 export interface SrsControlState {
   targets: SrsTargets
   sourceReleaseQuantities: SourceReleaseQuantities
+  tPurgeSettings: Readonly<TPurgeSettings>
   current: Record<SrsPileId, number>
   globalTarget: number
   globalCurrent: number
@@ -363,10 +368,14 @@ export interface SrsControlState {
   lanes: Record<SourceId, SrsLaneDiagnostic>
   tBypassBatch: {
     active: boolean
+    consecutiveDownstreamBackupDepth: number
+    dEntranceBlocked: boolean
+    triggerQualifies: boolean
     authorizedTrayIds: number[]
     enteredCount: number
     remainingCount: number
     sourceBatchPaused: boolean
+    pausedSource: SourceId | null
   }
 }
 
