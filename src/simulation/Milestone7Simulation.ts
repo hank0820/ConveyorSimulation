@@ -18,6 +18,7 @@ import type {
   ReturnedTrayRecord,
   SimulationStateWithProgress,
   SourceId,
+  SourceReleaseQuantities,
   SourceState,
   SrsPileId,
   SrsTargets,
@@ -25,6 +26,7 @@ import type {
   TrayLoadState,
 } from './types'
 import { DEFAULT_SRS_TARGETS, validateSrsTargets } from './srsTargets'
+import { DEFAULT_SOURCE_RELEASE_QUANTITIES, validateSourceReleaseQuantities } from './sourceReleaseSettings'
 
 const EPS = 1e-9
 const ZONE_LENGTH_FT = 2.5
@@ -147,6 +149,7 @@ export default class Milestone7Simulation {
   private asrsNextAssign: SourceId = 'A'
   private planningCadenceSec = DEFAULT_PLANNING_CADENCE_SEC
   private activeTargets: SrsTargets = { ...DEFAULT_SRS_TARGETS }
+  private activeSourceReleaseQuantities: SourceReleaseQuantities = { ...DEFAULT_SOURCE_RELEASE_QUANTITIES }
   private nextPlanningTime = 0
   private asrsAssigned: Record<SourceId, number> = { A: 0, B: 0, C: 0 }
   private asrsLastRelease: Record<SourceId, number> = { A: -1e9, B: -1e9, C: -1e9 }
@@ -210,16 +213,17 @@ export default class Milestone7Simulation {
   }
 
   reset() {
-    this.initialize(DEFAULT_SETTINGS(), DEFAULT_PLANNING_CADENCE_SEC, DEFAULT_SRS_TARGETS)
+    this.initialize(DEFAULT_SETTINGS(), DEFAULT_PLANNING_CADENCE_SEC, DEFAULT_SRS_TARGETS, DEFAULT_SOURCE_RELEASE_QUANTITIES)
   }
 
-  startScenario(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets = DEFAULT_SRS_TARGETS) {
+  startScenario(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets = DEFAULT_SRS_TARGETS, sourceReleaseQuantities: SourceReleaseQuantities = DEFAULT_SOURCE_RELEASE_QUANTITIES) {
     if (!Number.isFinite(planningCadenceSec) || planningCadenceSec <= 0) throw new Error('PendingDemand planning cadence must be a positive finite number')
-    this.initialize(settings, planningCadenceSec, targets)
+    this.initialize(settings, planningCadenceSec, targets, sourceReleaseQuantities)
   }
 
-  private initialize(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets) {
+  private initialize(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets, sourceReleaseQuantities: SourceReleaseQuantities) {
     this.activeTargets = validateSrsTargets(targets)
+    this.activeSourceReleaseQuantities = validateSourceReleaseQuantities(sourceReleaseQuantities)
     this.timeSec = 0
     this.trays = []
     this.totalTraysCreated = 0
@@ -830,10 +834,12 @@ export default class Milestone7Simulation {
     if (!source) return
     const available = this.releasableTrayIds(source)
     const purgeDemand = this.lanePurgeDemand(source, current)
-    const authorizedCount = purgeDemand > 0 ? Math.min(8, purgeDemand, available.length) : Math.min(8, available.length)
+    const configuredMaximum = this.activeSourceReleaseQuantities[source]
+    const authorizedCount = purgeDemand > 0 ? Math.min(configuredMaximum, purgeDemand, available.length) : Math.min(configuredMaximum, available.length)
     const authorizedTrayIds = available.slice(0, authorizedCount)
     this.activeSlug = {
       source,
+      configuredMaximum,
       authorizedCount: authorizedTrayIds.length,
       releasedCount: 0,
       authorizedTrayIds,
@@ -1423,7 +1429,7 @@ export default class Milestone7Simulation {
       const downstreamPile = `${source}2` as 'A2' | 'B2' | 'C2'
       const downstreamAvailable = this.positiveAvailability('T', srsCurrent) + this.positiveAvailability('D', srsCurrent) + this.positiveAvailability(downstreamPile, srsCurrent)
       return [source, {
-        source, targetSize: this.activeTargets[`${source}1` as 'A1' | 'B1' | 'C1'], currentCount: srsCurrent[`${source}1` as 'A1' | 'B1' | 'C1'],
+        source, activeReleaseQuantity: this.activeSourceReleaseQuantities[source], targetSize: this.activeTargets[`${source}1` as 'A1' | 'B1' | 'C1'], currentCount: srsCurrent[`${source}1` as 'A1' | 'B1' | 'C1'],
         pendingDemand: laneMissions.length, lanePurgeDemand: this.lanePurgeDemand(source, srsCurrent), localAvailable, downstreamAvailable,
         laneMissionCapacity: Math.max(0, localAvailable + downstreamAvailable - laneMissions.length),
         pendingEmptyMissions: laneMissions.filter((mission) => mission.missionType === 'EMPTY').length,
@@ -1432,7 +1438,7 @@ export default class Milestone7Simulation {
         maturedCartbuildMissions: laneMissions.filter((mission) => mission.missionType === 'CARTBUILD' && mission.state === 'READY_AT_EXCHANGER').length,
         lastActualExchangerReleaseTime: this.outboundDiagnostics[source].releaseTimes.at(-1)?.timeSec ?? null,
         nextEligibleExchangerReleaseTime: Math.max(0, this.asrsLastRelease[source] + CARTBUILD_INTERVAL_SEC),
-        activeSourceBatch: Boolean(active), frozenSourceBatchQuantity: active?.authorizedCount ?? 0,
+        activeSourceBatch: Boolean(active), activeBatchConfiguredMaximum: active?.configuredMaximum ?? 0, frozenSourceBatchQuantity: active?.authorizedCount ?? 0,
         sourceBatchReleasedCount: active?.releasedCount ?? 0, sourceBatchRemainingCount: active ? active.authorizedCount - active.releasedCount : 0,
       }]
     })) as SimulationStateWithProgress['srsControl']['lanes']
@@ -1551,7 +1557,7 @@ export default class Milestone7Simulation {
         cartonBalanceError: cartonIntroduced - cartonAttached - cartonOnConveyors - cartonConsumed,
       },
       srsControl: {
-        targets: { ...this.activeTargets }, current: { ...srsCurrent }, globalTarget: this.globalTarget(), globalCurrent: srsGlobalCurrent,
+        targets: { ...this.activeTargets }, sourceReleaseQuantities: { ...this.activeSourceReleaseQuantities }, current: { ...srsCurrent }, globalTarget: this.globalTarget(), globalCurrent: srsGlobalCurrent,
         globalPending: srsGlobalPending, globalAvailableCapacity: srsGlobalAvailable, planningCadenceSec: this.planningCadenceSec,
         nextPlanningTime: this.nextPlanningTime, planningCursor: this.asrsNextAssign, lanes: srsLanes,
         tBypassBatch: {

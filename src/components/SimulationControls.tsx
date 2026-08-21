@@ -1,6 +1,7 @@
 import type { FC, ReactNode } from 'react'
 import type { OperatingSettings, SimulationStateWithProgress, SourceId, SrsPileId } from '../simulation/types'
 import type { SrsTargetDrafts } from '../srsTargetDrafts'
+import type { SourceReleaseDrafts } from '../sourceReleaseDrafts'
 import { SRS_TARGET_PILES } from '../simulation/srsTargets'
 
 interface Props {
@@ -16,6 +17,10 @@ interface Props {
   targetErrors?: Partial<Record<SrsPileId, string>>
   targetsDirty?: boolean
   onTargetChange?: (pile: SrsPileId, value: string) => void
+  selectedSourceReleases?: SourceReleaseDrafts
+  sourceReleaseErrors?: Partial<Record<SourceId, string>>
+  sourceReleasesDirty?: boolean
+  onSourceReleaseChange?: (source: SourceId, value: string) => void
   onOperatingSettingChange: (setting: keyof OperatingSettings, enabled: boolean) => void
   onPlanningCadenceChange: (seconds: number) => void
   configurationNotice: string | null
@@ -88,7 +93,7 @@ const abbreviatedTrayId = (id: number | null) => id === null ? '—' : `T${Strin
 const secondsText = (seconds: number | null) => seconds === null ? '—' : `${seconds.toFixed(1)}s`
 
 const SimulationControls: FC<Props> = ({
-  state, playing, playbackSpeed, setPlaybackSpeed, onPlayPause, onStep, onReset, onStartScenario, selectedTargets, targetErrors = {}, targetsDirty = false, onTargetChange, onOperatingSettingChange, onPlanningCadenceChange, configurationNotice, collapsed, onToggleCollapsed,
+  state, playing, playbackSpeed, setPlaybackSpeed, onPlayPause, onStep, onReset, onStartScenario, selectedTargets, targetErrors = {}, targetsDirty = false, onTargetChange, selectedSourceReleases, sourceReleaseErrors = {}, sourceReleasesDirty = false, onSourceReleaseChange, onOperatingSettingChange, onPlanningCadenceChange, configurationNotice, collapsed, onToggleCollapsed,
 }) => {
   const purge = state.returnSystem.activePurgeBatch
   const frozenIds = purge?.authorizedTrayIds ?? state.returnSystem.lastCompletedPurgeBatch?.authorizedTrayIds ?? []
@@ -121,8 +126,13 @@ const SimulationControls: FC<Props> = ({
             <legend>SRS target sizes</legend>
             {SRS_TARGET_PILES.map((pile) => <label key={pile}><span>{pile}</span><input aria-label={`${pile} target size`} aria-invalid={Boolean(targetErrors[pile])} aria-describedby={targetErrors[pile] ? `${pile}-target-error` : undefined} type="number" min="1" max="999" step="1" value={selectedTargets[pile]} onChange={(event) => onTargetChange?.(pile, event.currentTarget.value)} />{targetErrors[pile] && <small id={`${pile}-target-error`} role="alert">{targetErrors[pile]}</small>}</label>)}
           </fieldset>}
-          <button className="start-scenario-button" type="button" disabled={Object.keys(targetErrors).length > 0} onClick={onStartScenario}>Start Scenario</button>
-          {targetsDirty && <p className="configuration-notice" role="status">Target edits are selected only. Apply with Start Scenario.</p>}
+          {selectedSourceReleases && <fieldset className="srs-target-controls" data-source-release-controls>
+            <legend>Release Control</legend>
+            <small>Maximum frozen batch released toward T/PRE_T.</small>
+            {(['A', 'B', 'C'] as SourceId[]).map((source) => <label key={source}><span>{source}1 batch quantity</span><input aria-label={`${source}1 batch quantity`} aria-invalid={Boolean(sourceReleaseErrors[source])} aria-describedby={sourceReleaseErrors[source] ? `${source}-release-error` : undefined} type="number" min="1" max={source === 'A' ? '45' : '38'} step="1" value={selectedSourceReleases[source]} onChange={(event) => onSourceReleaseChange?.(source, event.currentTarget.value)} /><small>Active: {state.srsControl.sourceReleaseQuantities[source]}</small>{sourceReleaseErrors[source] && <small id={`${source}-release-error`} role="alert">{sourceReleaseErrors[source]}</small>}</label>)}
+          </fieldset>}
+          <button className="start-scenario-button" type="button" disabled={Object.keys(targetErrors).length > 0 || Object.keys(sourceReleaseErrors).length > 0} onClick={onStartScenario}>Start Scenario</button>
+          {(targetsDirty || sourceReleasesDirty) && <p className="configuration-notice" role="status">Configuration edits are selected only. Apply with Start Scenario.</p>}
           {configurationNotice && <p className="configuration-notice" role="status">{configurationNotice}</p>}
         </section>
 
@@ -151,7 +161,8 @@ const SimulationControls: FC<Props> = ({
                 <Metric label="Pending EMPTY / CARTBUILD">{`${lane.pendingEmptyMissions}/${lane.pendingCartbuildMissions}`}</Metric>
                 <Metric label="Matured EMPTY / CARTBUILD">{`${lane.maturedEmptyMissions}/${lane.maturedCartbuildMissions}`}</Metric>
                 <Metric label="Last / next release">{`${lane.lastActualExchangerReleaseTime?.toFixed(1) ?? 'none'}/${lane.nextEligibleExchangerReleaseTime.toFixed(1)}s`}</Metric>
-                <Metric label="Source batch">{lane.activeSourceBatch ? `${lane.sourceBatchReleasedCount}/${lane.frozenSourceBatchQuantity} (${lane.sourceBatchRemainingCount} left)` : 'IDLE'}</Metric>
+                <Metric label="Source batch">{lane.activeSourceBatch ? `${source} max ${lane.activeBatchConfiguredMaximum} · ${lane.sourceBatchReleasedCount}/${lane.frozenSourceBatchQuantity} (${lane.sourceBatchRemainingCount} left)` : 'IDLE'}</Metric>
+                <Metric label="Release quantity">{lane.activeReleaseQuantity}</Metric>
               </div>
             </details>
           })}

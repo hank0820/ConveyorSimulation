@@ -6,8 +6,9 @@ import SimulationEngine from './simulation/SimulationEngine'
 import { applyOperatingSettingChange, applyPlanningCadenceChange, applyStartScenario } from './operatingSettings'
 import type { SimulationStateWithProgress } from './simulation/types'
 import type { OperatingSettings } from './simulation/types'
-import type { SrsPileId } from './simulation/types'
+import type { SourceId, SrsPileId } from './simulation/types'
 import { defaultSrsTargetDrafts, parseSrsTargetDrafts, targetsAreDirty } from './srsTargetDrafts'
+import { defaultSourceReleaseDrafts, parseSourceReleaseDrafts, sourceReleasesAreDirty } from './sourceReleaseDrafts'
 
 const SEGMENTS = [
   { id: 'A1', lengthFt: 103.5, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 45 },
@@ -36,8 +37,11 @@ function App() {
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [configurationNotice, setConfigurationNotice] = useState<string | null>(null)
   const [selectedTargets, setSelectedTargets] = useState(defaultSrsTargetDrafts)
+  const [selectedSourceReleases, setSelectedSourceReleases] = useState(defaultSourceReleaseDrafts)
   const targetValidation = parseSrsTargetDrafts(selectedTargets)
+  const sourceReleaseValidation = parseSourceReleaseDrafts(selectedSourceReleases)
   const targetsDirty = targetsAreDirty(selectedTargets, state.srsControl.targets)
+  const sourceReleasesDirty = sourceReleasesAreDirty(selectedSourceReleases, state.srsControl.sourceReleaseQuantities)
 
   // animation loop
   useEffect(() => {
@@ -83,6 +87,7 @@ function App() {
     setPlaying(false)
     setConfigurationNotice(null)
     setSelectedTargets(defaultSrsTargetDrafts())
+    setSelectedSourceReleases(defaultSourceReleaseDrafts())
   }
 
   function handleOperatingSetting(setting: keyof OperatingSettings, enabled: boolean) {
@@ -94,7 +99,7 @@ function App() {
   }
 
   function handleStartScenario() {
-    if (!targetValidation.targets) return
+    if (!targetValidation.targets || !sourceReleaseValidation.quantities) return
     applyStartScenario(
       engineRef.current,
       state.operatingSettings,
@@ -103,7 +108,13 @@ function App() {
       setState,
       setConfigurationNotice,
       targetValidation.targets,
+      sourceReleaseValidation.quantities,
     )
+  }
+
+  function handleSourceReleaseChange(source: SourceId, value: string) {
+    setPlaying(false)
+    setSelectedSourceReleases((drafts) => ({ ...drafts, [source]: value }))
   }
 
   function handleTargetChange(pile: SrsPileId, value: string) {
@@ -140,6 +151,10 @@ function App() {
         targetErrors={targetValidation.errors}
         targetsDirty={targetsDirty}
         onTargetChange={handleTargetChange}
+        selectedSourceReleases={selectedSourceReleases}
+        sourceReleaseErrors={sourceReleaseValidation.errors}
+        sourceReleasesDirty={sourceReleasesDirty}
+        onSourceReleaseChange={handleSourceReleaseChange}
         onOperatingSettingChange={handleOperatingSetting}
         onPlanningCadenceChange={handlePlanningCadence}
         configurationNotice={configurationNotice}

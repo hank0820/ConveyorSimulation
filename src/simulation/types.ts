@@ -124,6 +124,7 @@ export interface CartbuildSystemState {
 
 export interface ActiveSlugState {
   source: SourceId
+  configuredMaximum: number
   authorizedCount: number
   releasedCount: number
   authorizedTrayIds: number[]
@@ -323,9 +324,11 @@ export interface CompletedOutboundCycle {
 
 export type SrsPileId = 'A1' | 'B1' | 'C1' | 'T' | 'D' | 'A2' | 'B2' | 'C2'
 export type SrsTargets = Readonly<Record<SrsPileId, number>>
+export type SourceReleaseQuantities = Readonly<Record<SourceId, number>>
 
 export interface SrsLaneDiagnostic {
   source: SourceId
+  activeReleaseQuantity: number
   targetSize: number
   currentCount: number
   pendingDemand: number
@@ -340,6 +343,7 @@ export interface SrsLaneDiagnostic {
   lastActualExchangerReleaseTime: number | null
   nextEligibleExchangerReleaseTime: number
   activeSourceBatch: boolean
+  activeBatchConfiguredMaximum: number
   frozenSourceBatchQuantity: number
   sourceBatchReleasedCount: number
   sourceBatchRemainingCount: number
@@ -347,6 +351,7 @@ export interface SrsLaneDiagnostic {
 
 export interface SrsControlState {
   targets: SrsTargets
+  sourceReleaseQuantities: SourceReleaseQuantities
   current: Record<SrsPileId, number>
   globalTarget: number
   globalCurrent: number

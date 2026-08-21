@@ -1,4 +1,4 @@
-import type { Tray, ConveyorSegmentConfig, SimulationStateWithProgress, SourceConfig, SourceId, MergeState, OperatingSettings, SourceState, SrsTargets } from './types'
+import type { Tray, ConveyorSegmentConfig, SimulationStateWithProgress, SourceConfig, SourceId, MergeState, OperatingSettings, SourceReleaseQuantities, SourceState, SrsTargets } from './types'
 import ConveyorSegment from './ConveyorSegment'
 import HybridAccumulationPile from './HybridAccumulationPile'
 import Milestone7Simulation from './Milestone7Simulation'
@@ -189,9 +189,9 @@ export class SimulationEngine {
     else if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('PendingDemand planning cadence must be a positive finite number')
   }
 
-  startScenario(settings: OperatingSettings, planningCadenceSec: number, targets?: SrsTargets) {
+  startScenario(settings: OperatingSettings, planningCadenceSec: number, targets?: SrsTargets, sourceReleaseQuantities?: SourceReleaseQuantities) {
     if (!this.milestone7) throw new Error('Scenario startup requires the Milestone 7+ topology')
-    this.milestone7.startScenario(settings, planningCadenceSec, targets)
+    this.milestone7.startScenario(settings, planningCadenceSec, targets, sourceReleaseQuantities)
   }
 
   private tryInjectSources() {
@@ -1129,12 +1129,13 @@ export class SimulationEngine {
       },
       srsControl: {
         targets: { A1: 24, B1: 16, C1: 16, T: 6, D: 73, A2: 36, B2: 29, C2: 29 },
+        sourceReleaseQuantities: { A: 8, B: 8, C: 8 },
         current: { A1: occA, B1: occB, C1: occC, T: occT, D: occD, A2: 0, B2: 0, C2: 0 },
         globalTarget: 229, globalCurrent: occA + occB + occC + occT + occD,
         globalPending: pendingBy.A + pendingBy.B + pendingBy.C,
         globalAvailableCapacity: Math.max(0, 229 - occA - occB - occC - occT - occD - pendingBy.A - pendingBy.B - pendingBy.C),
         planningCadenceSec: 10, nextPlanningTime: 0, planningCursor: this.asrsNextAssign,
-        lanes: Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => [source, { source, targetSize: source === 'A' ? 24 : 16, currentCount: source === 'A' ? occA : source === 'B' ? occB : occC, pendingDemand: pendingBy[source], lanePurgeDemand: 0, localAvailable: 0, downstreamAvailable: 0, laneMissionCapacity: 0, pendingEmptyMissions: pendingBy[source], pendingCartbuildMissions: 0, maturedEmptyMissions: 0, maturedCartbuildMissions: 0, lastActualExchangerReleaseTime: null, nextEligibleExchangerReleaseTime: 0, activeSourceBatch: false, frozenSourceBatchQuantity: 0, sourceBatchReleasedCount: 0, sourceBatchRemainingCount: 0 }])) as SimulationStateWithProgress['srsControl']['lanes'],
+        lanes: Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => [source, { source, activeReleaseQuantity: 8, targetSize: source === 'A' ? 24 : 16, currentCount: source === 'A' ? occA : source === 'B' ? occB : occC, pendingDemand: pendingBy[source], lanePurgeDemand: 0, localAvailable: 0, downstreamAvailable: 0, laneMissionCapacity: 0, pendingEmptyMissions: pendingBy[source], pendingCartbuildMissions: 0, maturedEmptyMissions: 0, maturedCartbuildMissions: 0, lastActualExchangerReleaseTime: null, nextEligibleExchangerReleaseTime: 0, activeSourceBatch: false, activeBatchConfiguredMaximum: 0, frozenSourceBatchQuantity: 0, sourceBatchReleasedCount: 0, sourceBatchRemainingCount: 0 }])) as SimulationStateWithProgress['srsControl']['lanes'],
         tBypassBatch: { active: false, authorizedTrayIds: [], enteredCount: 0, remainingCount: 0, sourceBatchPaused: false },
       },
       returnSystem: {
