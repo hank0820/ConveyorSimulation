@@ -825,7 +825,7 @@ export default class Milestone7Simulation {
   }
 
   private authorizeSlugIfPossible() {
-    if (this.activeSlug) return
+    if (this.activePurgeBatch || this.activeSlug) return
     const order: SourceId[] = ['A', 'B', 'C']
     const start = order.indexOf(this.slugCursor)
     const cyclic = Array.from({ length: 3 }, (_, index) => order[(start + index) % 3])
@@ -864,6 +864,7 @@ export default class Milestone7Simulation {
   }
 
   private releaseActivePileTray() {
+    if (this.activePurgeBatch) return
     const slug = this.activeSlug
     if (!slug || slug.releasedCount >= slug.authorizedCount) return
     const pileId = `${slug.source}1`
