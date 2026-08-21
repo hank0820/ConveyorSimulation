@@ -9,7 +9,7 @@ const render = (overrides = {}) => renderToStaticMarkup(createElement(Simulation
 
 describe('Milestone 12B T purge controls', () => {
   test('renders selected and active defaults with understandable helper text and diagnostics', () => {
-    const markup = render()
+    const markup = render({ defaultOpenSections: ['srs-control'] })
     expect(markup).toContain('aria-label="T backup trigger"')
     expect(markup).toContain('aria-label="T purge quantity"')
     expect(markup).toContain('Consecutive occupied T zones measured upstream from D while D is blocked.')
