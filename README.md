@@ -4,7 +4,14 @@ A deterministic React and TypeScript model of a three-source conveyor system wit
 
 ## Milestone status
 
-Milestone 12 is implemented and validated. It extends Milestone 11's refined conveyor topology with configurable source-release and T-purge controls plus a reorganized operations sidebar, without changing conveyor geometry, routing, timing, robot behavior, or accounting.
+Milestone 14A adds source-pile `PendingDemand` visibility and physically correct hybrid-pile initialization without changing conveyor geometry, routing, transfer timing, robot behavior, or accounting.
+
+Milestone 14A delivers:
+
+- An authoritative `Pending Demand` display adjacent to A1, B1, and C1
+- Exactly one initial tray centered on each source pile's 41-foot belt
+- Remaining initial A1/B1/C1 inventory distributed in physical flow order across valid MDR positions
+- Explicit rejection of a scenario whose initial source inventory cannot fit one belt position plus its valid MDR positions
 
 Milestone 12 delivers:
 
@@ -31,7 +38,7 @@ A1, B1, and C1 are hybrid accumulation piles in authoritative exchanger-to-disch
 | B1 | 5 zones | Yes | 5 zones | 41 ft | 8 zones | 86 ft | 38 |
 | C1 | 5 zones | Yes | 5 zones | 41 ft | 8 zones | 86 ft | 38 |
 
-MDR zones are 2.5 feet long. At 120 ft/min, an unobstructed MDR transfer takes 1.25 simulated seconds. Each 41-foot belt holds at most 20 trays at two-foot pitch and has a 20.5-second nominal traversal.
+The production MDR zones are site-verified at 30 inches (2.5 feet). At 120 ft/min, an unobstructed MDR transfer takes 1.25 simulated seconds. Each 41-foot belt can hold at most 20 moving trays at two-foot pitch during runtime and has a 20.5-second nominal traversal; initialization uses exactly one tray centered at 20.5 feet.
 
 A blocked downstream MDR zone 0 stops the whole belt and rejects new belt entry. Detraying occurs after the first five MDR zones, between pre-detrayer zone 4 and post-detrayer zone 0. A loaded `CARTBUILD` split is atomic and requires both post-detrayer zone 0 and carton-lane zone 0 to be available. The same tray continues as `EMPTY`, while one carton enters the associated cartbuild lane. `EMPTY` trays cross the detrayer without creating cartons.
 
@@ -91,11 +98,7 @@ SRS targets, source-release quantities, the T backup trigger, T purge quantity, 
 
 Only A1, B1, C1, and D initialize from their targets. T, A2, B2, C2, and transport sections start physically empty.
 
-```text
-initial physical count = min(TargetSize, physical capacity)
-```
-
-The configured `TargetSize` itself remains unclamped. For example, A1 may have an active target of 60 while its physical initialization remains 45. Partial initial inventory fills from the downstream discharge end backward without overlap. Active targets drive SRS capacity, `PendingDemand`, lane `PurgeDemand`, and diagnostics.
+The configured `TargetSize` remains an SRS control target. Initial A1/B1/C1 inventory must fit one centered belt position plus every valid MDR position: 26 positions on A1 and 19 each on B1 and C1. A scenario that would initialize more inventory is rejected atomically rather than discarding, overlapping, or silently relocating trays. Valid partial initial inventory fills in physical flow order from the downstream discharge end backward: downstream MDR, the single centered belt position, post-detrayer MDR, then pre-detrayer MDR. Active targets drive SRS capacity, `PendingDemand`, lane `PurgeDemand`, and diagnostics.
 
 The default time-zero state is:
 
@@ -122,6 +125,14 @@ lanePurgeDemand = CurrentCount - TargetSize + PendingDemand
 ```
 
 Lane `PurgeDemand` is a signed SRS control quantity and is distinct from the configurable frozen physical T-to-PURGE batch.
+
+The schematic displays each source lane's authoritative `PendingDemand` beside A1, B1, and C1. These values come directly from unreleased ASRS missions in the live engine snapshot and update during playback independently of `CurrentCount`, `PurgeDemand`, physical occupancy, and release settings.
+
+### Throughput audit
+
+At 120 ft/min, a 30-inch one-zone pitch takes 1.25 seconds and therefore implies a theoretical unconstrained rate of 2,880 trays/hour. The PLC engineer identified 1,800 containers/hour as the straight-conveyor technical capability, equivalent to a two-second effective pitch. The enforcement mechanism is not yet confirmed; Milestone 14A adds no throttle and does not assume discharge pitch, spacing, photo-eye logic, motor-speed constraints, or transfer delays.
+
+Timed A1/B1/C1 release grants, the 1,800 CPH enforcement mechanism, discrete `PurgeDemand` command sequencing, and X merge batching remain deferred to Milestones 14B/14C pending PLC confirmation.
 
 ## Milestone 12 release controls
 
