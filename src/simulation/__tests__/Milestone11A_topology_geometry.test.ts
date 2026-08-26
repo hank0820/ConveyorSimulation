@@ -46,7 +46,7 @@ describe('Milestone 11A outbound topology and geometry', () => {
 
   test('pile placements expose the exact pre, post, belt, downstream order and dimensions', () => {
     const model = pile('A1', 15, 103.5)
-    const ordered = model.initialTrays(1, 'A', 45).trays
+    const ordered = model.initialTrays(1, 'A', 26).trays
       .sort((left, right) => left.positionFt - right.positionFt)
       .map(({ pilePlacement }) => pilePlacement!.component)
       .filter((component, index, components) => component !== components[index - 1])

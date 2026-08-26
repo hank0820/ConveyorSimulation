@@ -10,17 +10,24 @@ const SEGMENTS = [
 const SETTINGS = { korberEnabled: true, cartbuildAEnabled: true, cartbuildBEnabled: true, cartbuildCEnabled: true }
 
 describe('Milestone 11C configurable SRS targets', () => {
-  test('starts with custom active targets, capacity-clamped physical inventory, and immediate planning', () => {
+  test('starts with custom active targets, valid hybrid physical inventory, and immediate planning', () => {
     const engine = new SimulationEngine(SEGMENTS)
-    const targets: SrsTargets = { A1: 80, B1: 2, C1: 1, T: 7, D: 3, A2: 4, B2: 5, C2: 6 }
+    const targets: SrsTargets = { A1: 26, B1: 2, C1: 1, T: 7, D: 3, A2: 4, B2: 5, C2: 6 }
     engine.startScenario(SETTINGS, 10, targets)
     ;(targets as Record<string, number>).A1 = 1
     const state = engine.getState()
-    expect(state.srsControl.targets).toEqual({ A1: 80, B1: 2, C1: 1, T: 7, D: 3, A2: 4, B2: 5, C2: 6 })
-    expect(state.srsControl.current).toEqual({ A1: 45, B1: 2, C1: 1, T: 0, D: 3, A2: 0, B2: 0, C2: 0 })
-    expect(state.srsControl.globalTarget).toBe(108)
+    expect(state.srsControl.targets).toEqual({ A1: 26, B1: 2, C1: 1, T: 7, D: 3, A2: 4, B2: 5, C2: 6 })
+    expect(state.srsControl.current).toEqual({ A1: 26, B1: 2, C1: 1, T: 0, D: 3, A2: 0, B2: 0, C2: 0 })
+    expect(state.srsControl.globalTarget).toBe(54)
     expect(state.trays.filter((tray) => tray.zonePlacement?.conveyorId === 'D').map((tray) => tray.zonePlacement?.zoneIndex)).toEqual([89, 90, 91])
     expect(state.srsControl.globalPending).toBeGreaterThan(0)
+  })
+
+  test('rejects an initial hybrid total that exceeds one belt position plus valid MDR positions without changing the scenario', () => {
+    const engine = new SimulationEngine(SEGMENTS)
+    const before = engine.getState()
+    expect(() => engine.startScenario(SETTINGS, 10, { ...DEFAULT_SRS_TARGETS, A1: 27 })).toThrow(/A1 initial tray count 27 exceeds one belt position plus 25 MDR positions/)
+    expect(engine.getState()).toEqual(before)
   })
 
   test.each([0, -1, 1.5, 1000, Number.NaN])('rejects invalid target %s without changing the scenario', (bad) => {

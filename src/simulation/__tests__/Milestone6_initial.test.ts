@@ -17,24 +17,24 @@ test('reset initializes hybrid piles with expected initial counts and non-overla
   const s = e.getState()
 
   // Initial target inventory fills from the physical discharge end backward.
-  expect(s.preDetrayerMdrA).toBe(0)
-  expect(s.postDetrayerMdrA).toBe(0)
-  expect(s.beltCountA).toBe(9)
+  expect(s.preDetrayerMdrA).toBe(3)
+  expect(s.postDetrayerMdrA).toBe(5)
+  expect(s.beltCountA).toBe(1)
   expect(s.downstreamMdrA).toBe(15)
   expect(s.pendingA).toBeDefined()
   expect(s.pendingA).toBeGreaterThanOrEqual(0)
   expect(s.trays.filter(t => t.currentSegmentId === 'A1').length).toBe(24)
 
   // B1 and C1 initial counts
-  expect(s.preDetrayerMdrB).toBe(0)
-  expect(s.postDetrayerMdrB).toBe(0)
-  expect(s.beltCountB).toBe(8)
+  expect(s.preDetrayerMdrB).toBe(2)
+  expect(s.postDetrayerMdrB).toBe(5)
+  expect(s.beltCountB).toBe(1)
   expect(s.downstreamMdrB).toBe(8)
   expect(s.trays.filter(t => t.currentSegmentId === 'B1').length).toBe(16)
 
-  expect(s.preDetrayerMdrC).toBe(0)
-  expect(s.postDetrayerMdrC).toBe(0)
-  expect(s.beltCountC).toBe(8)
+  expect(s.preDetrayerMdrC).toBe(2)
+  expect(s.postDetrayerMdrC).toBe(5)
+  expect(s.beltCountC).toBe(1)
   expect(s.downstreamMdrC).toBe(8)
   expect(s.trays.filter(t => t.currentSegmentId === 'C1').length).toBe(16)
 

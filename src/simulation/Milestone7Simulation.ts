@@ -31,10 +31,12 @@ import { DEFAULT_SOURCE_RELEASE_QUANTITIES, validateSourceReleaseQuantities } fr
 import { DEFAULT_T_PURGE_SETTINGS, validateTPurgeSettings } from './tPurgeSettings'
 
 const EPS = 1e-9
-const ZONE_LENGTH_FT = 2.5
+export const MDR_ZONE_LENGTH_FT = 2.5
+const ZONE_LENGTH_FT = MDR_ZONE_LENGTH_FT
 const TRAY_LENGTH_FT = 2
 const SPEED_FT_PER_SEC = 2
-const ZONE_TRANSFER_SEC = ZONE_LENGTH_FT / SPEED_FT_PER_SEC
+export const MDR_ZONE_TRANSFER_SEC = MDR_ZONE_LENGTH_FT / SPEED_FT_PER_SEC
+const ZONE_TRANSFER_SEC = MDR_ZONE_TRANSFER_SEC
 const KORBER_INTERVAL_SEC = 3600 / 1050
 export const ZONE_COUNTS = { PRE_T: 6, T: 12, D: 92, PURGE: 12, E: 28, X: 4, S: 8 } as const
 type ZonedId = keyof typeof ZONE_COUNTS
@@ -44,6 +46,11 @@ export const INBOUND_COMPOSITE_CONFIGS = {
   A2: { totalLengthFt: 136, sorterSideMdrCount: 33, spiralLengthFt: 41, exchangerSideMdrCount: 5 },
   B2: { totalLengthFt: 118.5, sorterSideMdrCount: 26, spiralLengthFt: 41, exchangerSideMdrCount: 5 },
   C2: { totalLengthFt: 118.5, sorterSideMdrCount: 26, spiralLengthFt: 41, exchangerSideMdrCount: 5 },
+} as const
+export const HYBRID_PILE_CONFIGS = {
+  A1: { pileId: 'A1', totalLengthFt: 103.5, preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 15, beltLengthFt: 41, mdrZoneLengthFt: MDR_ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT },
+  B1: { pileId: 'B1', totalLengthFt: 86, preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 8, beltLengthFt: 41, mdrZoneLengthFt: MDR_ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT },
+  C1: { pileId: 'C1', totalLengthFt: 86, preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 8, beltLengthFt: 41, mdrZoneLengthFt: MDR_ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT },
 } as const
 const CARTBUILD_LANES: CartbuildLaneId[] = ['CARTBUILD_A', 'CARTBUILD_B', 'CARTBUILD_C']
 const CARTBUILD_ZONE_COUNT = 30
@@ -206,9 +213,7 @@ export default class Milestone7Simulation {
     this.returnEnabled = RETURN_IDS.every((id) => segments.some((segment) => segment.id === id))
     this.cartbuildAvailable = CARTBUILD_LANES.every((id) => segments.some((segment) => segment.id === id))
     this.asrsReturnRobotsEnabled = this.returnEnabled && this.cartbuildAvailable
-    this.piles.set('A1', new HybridAccumulationPile({ pileId: 'A1', totalLengthFt: 103.5, preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 15, beltLengthFt: 41, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
-    this.piles.set('B1', new HybridAccumulationPile({ pileId: 'B1', totalLengthFt: 86, preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 8, beltLengthFt: 41, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
-    this.piles.set('C1', new HybridAccumulationPile({ pileId: 'C1', totalLengthFt: 86, preDetrayerMdrCount: 5, postDetrayerMdrCount: 5, downstreamMdrCount: 8, beltLengthFt: 41, mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
+    for (const config of Object.values(HYBRID_PILE_CONFIGS)) this.piles.set(config.pileId, new HybridAccumulationPile(config))
     for (const conveyorId of RETURN_DESTINATIONS) {
       this.inboundComposites.set(conveyorId, new InboundCompositeConveyor({ conveyorId, ...INBOUND_COMPOSITE_CONFIGS[conveyorId], mdrZoneLengthFt: ZONE_LENGTH_FT, trayLengthFt: TRAY_LENGTH_FT }))
     }
@@ -225,7 +230,16 @@ export default class Milestone7Simulation {
   }
 
   private initialize(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets, sourceReleaseQuantities: SourceReleaseQuantities, tPurgeSettings: TPurgeSettings) {
-    this.activeTargets = validateSrsTargets(targets)
+    const validatedTargets = validateSrsTargets(targets)
+    for (const source of ['A', 'B', 'C'] as SourceId[]) {
+      const pileId = `${source}1` as 'A1' | 'B1' | 'C1'
+      const pile = this.piles.get(pileId)!
+      const initialTrayCount = Math.min(validatedTargets[pileId], pile.getPhysicalCapacity())
+      if (initialTrayCount > pile.getInitializationCapacity()) {
+        throw new Error(`${pileId} initial tray count ${initialTrayCount} exceeds one belt position plus ${pile.getMdrPositions()} MDR positions`)
+      }
+    }
+    this.activeTargets = validatedTargets
     this.activeSourceReleaseQuantities = validateSourceReleaseQuantities(sourceReleaseQuantities)
     const tCapacity = this.segments.find(({ id }) => id === 'T')?.maxOccupancy ?? ZONE_COUNTS.T
     const purgeCapacity = this.segments.find(({ id }) => id === 'PURGE')?.maxOccupancy ?? ZONE_COUNTS.PURGE
