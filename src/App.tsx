@@ -146,7 +146,7 @@ function App() {
             {state.materialBalanceError === 0 ? 'SYSTEM BALANCED' : 'BALANCE ALERT'}
           </div>
         </header>
-        <div className="diagram-frame">
+        <div className="diagram-frame" data-schematic-scroll-container="true" data-narrow-schematic-min-width="1200" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
           <ConveyorDiagram segments={state.segments} trays={state.trays} state={state} />
         </div>
       </section>

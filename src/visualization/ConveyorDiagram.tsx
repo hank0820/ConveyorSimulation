@@ -307,7 +307,7 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
   ])) as Record<SourceId, VisualRobot[]>
 
   return (
-    <svg className="conveyor-diagram" data-return-enabled={state.returnSystem.enabled} viewBox={`0 0 ${VIEWBOX.width} ${VIEWBOX.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Complete conveyor and ASRS robot network">
+    <svg className="conveyor-diagram" data-responsive-min-width="1200" data-return-enabled={state.returnSystem.enabled} viewBox={`0 0 ${VIEWBOX.width} ${VIEWBOX.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Complete conveyor and ASRS robot network">
       <title>Full conveyor network with ASRS outbound, dual-cycle, and inbound-only robots</title>
       <defs>
         <pattern id="schematic-grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M 20 0 L 0 0 0 20" fill="none" stroke={COLORS.grid} strokeWidth="1" /></pattern>
@@ -428,6 +428,17 @@ const ConveyorDiagram: FC<Props> = ({ segments, trays, state }) => {
         ])}
         <text x={805} y={516} textAnchor="middle" fill={COLORS.text} fontSize={11} fontWeight={700}>RETURN SORTER</text>
         <text x={1518} y={57} fill={COLORS.text} fontSize={10}>FLOW →</text>
+      </g>
+
+      <g aria-label="Source pile Pending Demand">
+        {PILES.map((pile) => {
+          const source = pile.id.slice(0, 1) as SourceId
+          const pendingDemand = state.srsControl.lanes[source].pendingDemand
+          return <g key={pile.id} role="group" aria-label={`${pile.id} Pending Demand: ${pendingDemand}`} data-pending-demand-pile={pile.id} data-pending-demand={pendingDemand} transform={`translate(${pile.x - 50} 510)`}>
+            <rect width={100} height={22} rx={4} fill="rgba(255,255,255,.94)" stroke="#5f7786" strokeWidth={1.5} />
+            <text x={50} y={14.5} textAnchor="middle" fill={COLORS.text} fontSize={8.5} fontWeight={700}>{`Pending Demand: ${pendingDemand}`}</text>
+          </g>
+        })}
       </g>
 
       <Equipment id="KORBER" x={1520} y={73} width={70}>KÖRBER</Equipment>

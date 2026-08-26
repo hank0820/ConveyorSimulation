@@ -46,8 +46,9 @@ describe('Milestone 12A configurable source release quantities', () => {
 
   test('partial positive purge demand and available inventory cap authorization', () => {
     const engine = new SimulationEngine(SEGMENTS)
-    engine.startScenario(SETTINGS, 10, { ...DEFAULT_SRS_TARGETS, A1: 42 }, { A: 12, B: 8, C: 8 })
+    engine.startScenario(SETTINGS, 10, DEFAULT_SRS_TARGETS, { A: 12, B: 8, C: 8 })
     const runtime = runtimeOf(engine)
+    runtime.activeTargets = { ...DEFAULT_SRS_TARGETS, A1: 42 }
     runtime.missions = []
     runtime.trays = pile('A', 45)
     runtime.activeSlug = null

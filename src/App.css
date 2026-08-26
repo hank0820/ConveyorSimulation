@@ -63,7 +63,8 @@
   display: flex;
   border: 1px solid #aeb9c2;
   border-radius: 6px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: #f8fafb;
   box-shadow: 0 5px 18px rgba(35, 52, 65, .09);
 }
@@ -321,6 +322,13 @@
   .app-header h1 { font-size: 18px; }
   .panel-body { padding: 8px; }
   .diagnostic-group { padding: 8px; margin-bottom: 7px; }
+}
+
+@media (max-width: 1200px) {
+  .conveyor-diagram {
+    width: 1200px;
+    min-width: 1200px;
+  }
 }
 
 @media (max-width: 900px) {

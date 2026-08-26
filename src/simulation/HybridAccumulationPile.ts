@@ -32,6 +32,10 @@ export default class HybridAccumulationPile {
     return this.getMdrPositions() + this.getBeltPositions()
   }
 
+  getInitializationCapacity(): number {
+    return this.getMdrPositions() + 1
+  }
+
   getNominalBeltTraversalSec(speedFtPerMin = 120): number {
     return this.config.beltLengthFt / (speedFtPerMin / 60)
   }
@@ -50,11 +54,7 @@ export default class HybridAccumulationPile {
     for (let index = this.config.downstreamMdrCount - 1; index >= 0; index--) {
       positions.push({ pileId: this.config.pileId, component: 'MDR_DOWNSTREAM', zoneIndex: index })
     }
-    const halfTray = this.config.trayLengthFt / 2
-    const maximumCenter = this.config.beltLengthFt - halfTray
-    for (let index = 0; index < this.getBeltPositions(); index++) {
-      positions.push({ pileId: this.config.pileId, component: 'BELT', beltPosFt: maximumCenter - index * this.config.trayLengthFt })
-    }
+    positions.push({ pileId: this.config.pileId, component: 'BELT', beltPosFt: this.config.beltLengthFt / 2 })
     for (let index = this.config.postDetrayerMdrCount - 1; index >= 0; index--) {
       positions.push({ pileId: this.config.pileId, component: 'MDR_POST_DETRAYER', zoneIndex: index })
     }
@@ -65,8 +65,8 @@ export default class HybridAccumulationPile {
   }
 
   initialTrays(startingId: number, origin: SourceId, trayCount: number) {
-    if (!Number.isInteger(trayCount) || trayCount < 0 || trayCount > this.getPhysicalCapacity()) {
-      throw new Error(`${this.config.pileId} initial tray count ${trayCount} exceeds physical capacity ${this.getPhysicalCapacity()}`)
+    if (!Number.isInteger(trayCount) || trayCount < 0 || trayCount > this.getInitializationCapacity()) {
+      throw new Error(`${this.config.pileId} initial tray count ${trayCount} exceeds one belt position plus ${this.getMdrPositions()} MDR positions`)
     }
     let nextId = startingId
     const trays = this.positionsFromDischargeBackward().slice(0, trayCount).map((pilePlacement): Tray => ({
