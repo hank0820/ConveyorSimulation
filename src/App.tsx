@@ -6,9 +6,9 @@ import SimulationEngine from './simulation/SimulationEngine'
 import { applyOperatingSettingChange, applyPlanningCadenceChange, applyStartScenario } from './operatingSettings'
 import type { SimulationStateWithProgress } from './simulation/types'
 import type { OperatingSettings } from './simulation/types'
-import type { SourceId, SrsPileId } from './simulation/types'
+import type { SrsPileId } from './simulation/types'
 import { defaultSrsTargetDrafts, parseSrsTargetDrafts, targetsAreDirty } from './srsTargetDrafts'
-import { defaultSourceReleaseDrafts, parseSourceReleaseDrafts, sourceReleasesAreDirty } from './sourceReleaseDrafts'
+import { defaultSourceReleaseWindowDraft, parseSourceReleaseWindowDraft, sourceReleaseWindowIsDirty } from './sourceReleaseWindowDraft'
 import { defaultTPurgeDrafts, parseTPurgeDrafts, tPurgeDraftsAreDirty } from './tPurgeDrafts'
 
 const SEGMENTS = [
@@ -38,14 +38,14 @@ function App() {
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [configurationNotice, setConfigurationNotice] = useState<string | null>(null)
   const [selectedTargets, setSelectedTargets] = useState(defaultSrsTargetDrafts)
-  const [selectedSourceReleases, setSelectedSourceReleases] = useState(defaultSourceReleaseDrafts)
+  const [selectedSourceReleaseWindow, setSelectedSourceReleaseWindow] = useState(defaultSourceReleaseWindowDraft)
   const [selectedTPurge, setSelectedTPurge] = useState(defaultTPurgeDrafts)
   const targetValidation = parseSrsTargetDrafts(selectedTargets)
-  const sourceReleaseValidation = parseSourceReleaseDrafts(selectedSourceReleases)
+  const sourceReleaseWindowValidation = parseSourceReleaseWindowDraft(selectedSourceReleaseWindow)
   const tPurgeMaximum = Math.min(state.segments.find(({ id }) => id === 'T')?.maxOccupancy ?? 12, state.segments.find(({ id }) => id === 'PURGE')?.maxOccupancy ?? 12)
   const tPurgeValidation = parseTPurgeDrafts(selectedTPurge, tPurgeMaximum)
   const targetsDirty = targetsAreDirty(selectedTargets, state.srsControl.targets)
-  const sourceReleasesDirty = sourceReleasesAreDirty(selectedSourceReleases, state.srsControl.sourceReleaseQuantities)
+  const sourceReleaseWindowDirty = sourceReleaseWindowIsDirty(selectedSourceReleaseWindow, state.srsControl.sourceReleaseWindowSec)
   const tPurgeDirty = tPurgeDraftsAreDirty(selectedTPurge, state.srsControl.tPurgeSettings)
 
   // animation loop
@@ -92,7 +92,7 @@ function App() {
     setPlaying(false)
     setConfigurationNotice(null)
     setSelectedTargets(defaultSrsTargetDrafts())
-    setSelectedSourceReleases(defaultSourceReleaseDrafts())
+    setSelectedSourceReleaseWindow(defaultSourceReleaseWindowDraft())
     setSelectedTPurge(defaultTPurgeDrafts())
   }
 
@@ -105,7 +105,7 @@ function App() {
   }
 
   function handleStartScenario() {
-    if (!targetValidation.targets || !sourceReleaseValidation.quantities || !tPurgeValidation.settings) return
+    if (!targetValidation.targets || sourceReleaseWindowValidation.value === undefined || !tPurgeValidation.settings) return
     applyStartScenario(
       engineRef.current,
       state.operatingSettings,
@@ -114,14 +114,14 @@ function App() {
       setState,
       setConfigurationNotice,
       targetValidation.targets,
-      sourceReleaseValidation.quantities,
+      sourceReleaseWindowValidation.value,
       tPurgeValidation.settings,
     )
   }
 
-  function handleSourceReleaseChange(source: SourceId, value: string) {
+  function handleSourceReleaseWindowChange(value: string) {
     setPlaying(false)
-    setSelectedSourceReleases((drafts) => ({ ...drafts, [source]: value }))
+    setSelectedSourceReleaseWindow(value)
   }
 
   function handleTPurgeChange(field: 'backupTrigger' | 'purgeQuantity', value: string) {
@@ -163,10 +163,10 @@ function App() {
         targetErrors={targetValidation.errors}
         targetsDirty={targetsDirty}
         onTargetChange={handleTargetChange}
-        selectedSourceReleases={selectedSourceReleases}
-        sourceReleaseErrors={sourceReleaseValidation.errors}
-        sourceReleasesDirty={sourceReleasesDirty}
-        onSourceReleaseChange={handleSourceReleaseChange}
+        selectedSourceReleaseWindow={selectedSourceReleaseWindow}
+        sourceReleaseWindowError={sourceReleaseWindowValidation.error}
+        sourceReleaseWindowDirty={sourceReleaseWindowDirty}
+        onSourceReleaseWindowChange={handleSourceReleaseWindowChange}
         selectedTPurge={selectedTPurge}
         tPurgeErrors={tPurgeValidation.errors}
         tPurgeDirty={tPurgeDirty}

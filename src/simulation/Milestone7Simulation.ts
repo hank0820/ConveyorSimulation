@@ -1,7 +1,6 @@
 import HybridAccumulationPile from './HybridAccumulationPile'
 import InboundCompositeConveyor from './InboundCompositeConveyor'
 import type {
-  ActiveSlugState,
   BeltDiagnostic,
   CartbuildLaneId,
   CartonMarker,
@@ -18,7 +17,7 @@ import type {
   ReturnedTrayRecord,
   SimulationStateWithProgress,
   SourceId,
-  SourceReleaseQuantities,
+  SourceReleaseGrantState,
   SourceState,
   SrsPileId,
   SrsTargets,
@@ -27,7 +26,7 @@ import type {
   TrayLoadState,
 } from './types'
 import { DEFAULT_SRS_TARGETS, validateSrsTargets } from './srsTargets'
-import { DEFAULT_SOURCE_RELEASE_QUANTITIES, validateSourceReleaseQuantities } from './sourceReleaseSettings'
+import { DEFAULT_SOURCE_RELEASE_WINDOW_SEC, validateSourceReleaseWindowSec } from './sourceReleaseWindowSettings'
 import { DEFAULT_T_PURGE_SETTINGS, validateTPurgeSettings } from './tPurgeSettings'
 
 const EPS = 1e-9
@@ -158,16 +157,17 @@ export default class Milestone7Simulation {
   private asrsNextAssign: SourceId = 'A'
   private planningCadenceSec = DEFAULT_PLANNING_CADENCE_SEC
   private activeTargets: SrsTargets = { ...DEFAULT_SRS_TARGETS }
-  private activeSourceReleaseQuantities: SourceReleaseQuantities = { ...DEFAULT_SOURCE_RELEASE_QUANTITIES }
+  private activeSourceReleaseWindowSec = DEFAULT_SOURCE_RELEASE_WINDOW_SEC
   private activeTPurgeSettings: Readonly<TPurgeSettings> = { ...DEFAULT_T_PURGE_SETTINGS }
   private nextPlanningTime = 0
   private asrsAssigned: Record<SourceId, number> = { A: 0, B: 0, C: 0 }
   private asrsLastRelease: Record<SourceId, number> = { A: -1e9, B: -1e9, C: -1e9 }
   private exchangerStations = createExchangerStations()
   private sources = SOURCE_STATES.map((source) => ({ ...source }))
-  private slugCursor: SourceId = 'A'
-  private activeSlug: ActiveSlugState | null = null
-  private lastCompletedSlug: ActiveSlugState | null = null
+  private sourceGrantCursor: SourceId = 'A'
+  private sourceGrantCounter = 0
+  private activeSourceGrant: SourceReleaseGrantState | null = null
+  private lastCompletedSourceGrant: SourceReleaseGrantState | null = null
   private nextConsumptionTime = KORBER_INTERVAL_SEC
   private korberStarved = false
   private lastConsumedTrayId: number | null = null
@@ -221,15 +221,15 @@ export default class Milestone7Simulation {
   }
 
   reset() {
-    this.initialize(DEFAULT_SETTINGS(), DEFAULT_PLANNING_CADENCE_SEC, DEFAULT_SRS_TARGETS, DEFAULT_SOURCE_RELEASE_QUANTITIES, DEFAULT_T_PURGE_SETTINGS)
+    this.initialize(DEFAULT_SETTINGS(), DEFAULT_PLANNING_CADENCE_SEC, DEFAULT_SRS_TARGETS, DEFAULT_SOURCE_RELEASE_WINDOW_SEC, DEFAULT_T_PURGE_SETTINGS)
   }
 
-  startScenario(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets = DEFAULT_SRS_TARGETS, sourceReleaseQuantities: SourceReleaseQuantities = DEFAULT_SOURCE_RELEASE_QUANTITIES, tPurgeSettings: TPurgeSettings = DEFAULT_T_PURGE_SETTINGS) {
+  startScenario(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets = DEFAULT_SRS_TARGETS, sourceReleaseWindowSec = DEFAULT_SOURCE_RELEASE_WINDOW_SEC, tPurgeSettings: TPurgeSettings = DEFAULT_T_PURGE_SETTINGS) {
     if (!Number.isFinite(planningCadenceSec) || planningCadenceSec <= 0) throw new Error('PendingDemand planning cadence must be a positive finite number')
-    this.initialize(settings, planningCadenceSec, targets, sourceReleaseQuantities, tPurgeSettings)
+    this.initialize(settings, planningCadenceSec, targets, sourceReleaseWindowSec, tPurgeSettings)
   }
 
-  private initialize(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets, sourceReleaseQuantities: SourceReleaseQuantities, tPurgeSettings: TPurgeSettings) {
+  private initialize(settings: OperatingSettings, planningCadenceSec: number, targets: SrsTargets, sourceReleaseWindowSec: number, tPurgeSettings: TPurgeSettings) {
     const validatedTargets = validateSrsTargets(targets)
     for (const source of ['A', 'B', 'C'] as SourceId[]) {
       const pileId = `${source}1` as 'A1' | 'B1' | 'C1'
@@ -239,11 +239,13 @@ export default class Milestone7Simulation {
         throw new Error(`${pileId} initial tray count ${initialTrayCount} exceeds one belt position plus ${pile.getMdrPositions()} MDR positions`)
       }
     }
-    this.activeTargets = validatedTargets
-    this.activeSourceReleaseQuantities = validateSourceReleaseQuantities(sourceReleaseQuantities)
+    const validatedSourceReleaseWindowSec = validateSourceReleaseWindowSec(sourceReleaseWindowSec)
     const tCapacity = this.segments.find(({ id }) => id === 'T')?.maxOccupancy ?? ZONE_COUNTS.T
     const purgeCapacity = this.segments.find(({ id }) => id === 'PURGE')?.maxOccupancy ?? ZONE_COUNTS.PURGE
-    this.activeTPurgeSettings = validateTPurgeSettings(tPurgeSettings, Math.min(tCapacity, purgeCapacity))
+    const validatedTPurgeSettings = validateTPurgeSettings(tPurgeSettings, Math.min(tCapacity, purgeCapacity))
+    this.activeTargets = validatedTargets
+    this.activeSourceReleaseWindowSec = validatedSourceReleaseWindowSec
+    this.activeTPurgeSettings = validatedTPurgeSettings
     this.timeSec = 0
     this.trays = []
     this.totalTraysCreated = 0
@@ -260,9 +262,10 @@ export default class Milestone7Simulation {
     this.asrsLastRelease = { A: -1e9, B: -1e9, C: -1e9 }
     this.exchangerStations = createExchangerStations()
     this.sources = SOURCE_STATES.map((source) => ({ ...source }))
-    this.slugCursor = 'A'
-    this.activeSlug = null
-    this.lastCompletedSlug = null
+    this.sourceGrantCursor = 'A'
+    this.sourceGrantCounter = 0
+    this.activeSourceGrant = null
+    this.lastCompletedSourceGrant = null
     this.nextConsumptionTime = KORBER_INTERVAL_SEC
     this.korberStarved = false
     this.lastConsumedTrayId = null
@@ -315,9 +318,14 @@ export default class Milestone7Simulation {
     if (seconds <= 0) return
     let remaining = seconds
     while (remaining > EPS) {
-      const delta = Math.min(0.1, remaining)
+      this.synchronizeSourceGrant()
+      const expiryDelta = this.activeSourceGrant?.phase === 'ACTIVE' && this.activeSourceGrant.pausedAtSec === null
+        ? this.activeSourceGrant.expiresAtSec - this.timeSec
+        : Infinity
+      const delta = Math.min(0.1, remaining, expiryDelta > EPS ? expiryDelta : 0.1)
       remaining -= delta
       this.timeSec += delta
+      this.synchronizeSourceGrant()
       this.matureMissions()
       this.processKorber()
       this.planPendingDemandIfDue()
@@ -326,10 +334,12 @@ export default class Milestone7Simulation {
       this.processCartonConveyors(delta)
       this.processCartonOperators()
       this.processPiles(delta)
-      this.authorizeSlugIfPossible()
-      this.releaseActivePileTray()
+      this.authorizeSourceGrantIfPossible()
+      this.releaseActiveSourceTray()
       this.authorizePurgeIfNeeded()
+      this.synchronizeSourceGrant()
       this.processZonedBoundaries()
+      this.synchronizeSourceGrant()
       this.processReturnBoundaries()
       this.processExchangerSinks()
       this.attemptExchangerReleases()
@@ -537,7 +547,7 @@ export default class Milestone7Simulation {
 
   private processZonedBoundaries() {
     const preTFinal = this.zonedOccupancy('PRE_T')[ZONE_COUNTS.PRE_T - 1]
-    if (preTFinal && !this.zonedOccupancy('T')[0] && this.activeSlug && this.activeSlug.source !== 'C') {
+    if (preTFinal && !this.zonedOccupancy('T')[0] && this.activeSourceGrant && this.activeSourceGrant.source !== 'C') {
       this.moveToZonedEntrance(preTFinal, 'T')
       this.recordEnteredT(preTFinal)
     }
@@ -838,14 +848,15 @@ export default class Milestone7Simulation {
     return current[`${source}1` as 'A1' | 'B1' | 'C1'] - this.activeTargets[`${source}1` as 'A1' | 'B1' | 'C1'] + this.pendingDemand(source)
   }
 
-  private authorizeSlugIfPossible() {
-    if (this.activePurgeBatch || this.activeSlug) return
+  private authorizeSourceGrantIfPossible() {
+    if (this.activePurgeBatch || this.activeSourceGrant) return
     const order: SourceId[] = ['A', 'B', 'C']
-    const start = order.indexOf(this.slugCursor)
+    const start = order.indexOf(this.sourceGrantCursor)
     const cyclic = Array.from({ length: 3 }, (_, index) => order[(start + index) % 3])
     const current = this.srsCurrentCounts()
     const dAvailable = this.isDEntranceAvailable()
-    const eligible = cyclic.filter((source) => this.releasableTrayIds(source).length > 0 && (dAvailable || this.lanePurgeDemand(source, current) > 0))
+    const tFull = this.zonedOccupancy('T').every(Boolean)
+    const eligible = cyclic.filter((source) => this.releasableTrayIds(source).length > 0 && !tFull && (dAvailable || this.lanePurgeDemand(source, current) > 0))
     if (!eligible.length) return
     const highestPositive = Math.max(0, ...eligible.map((source) => this.lanePurgeDemand(source, current)))
     let source: SourceId | undefined
@@ -858,51 +869,89 @@ export default class Milestone7Simulation {
       source = cyclic.find((candidate) => physicallyFull.includes(candidate)) ?? cyclic.find((candidate) => eligible.includes(candidate))
     }
     if (!source) return
-    const available = this.releasableTrayIds(source)
-    const purgeDemand = this.lanePurgeDemand(source, current)
-    const configuredMaximum = this.activeSourceReleaseQuantities[source]
-    const authorizedCount = purgeDemand > 0 ? Math.min(configuredMaximum, purgeDemand, available.length) : Math.min(configuredMaximum, available.length)
-    const authorizedTrayIds = available.slice(0, authorizedCount)
-    this.activeSlug = {
+    this.activeSourceGrant = {
+      grantId: ++this.sourceGrantCounter,
       source,
-      configuredMaximum,
-      authorizedCount: authorizedTrayIds.length,
       releasedCount: 0,
-      authorizedTrayIds,
       enteredTCount: 0,
-      finalAuthorizedTrayId: authorizedTrayIds[authorizedTrayIds.length - 1],
-      authorizedAtSec: this.timeSec,
+      startedAtSec: this.timeSec,
+      expiresAtSec: this.timeSec + this.activeSourceReleaseWindowSec,
+      pausedAtSec: null,
+      remainingSecWhenPaused: null,
+      drainingStartedAtSec: null,
       completedAtSec: null,
-      status: 'ACTIVE',
+      phase: 'ACTIVE',
     }
   }
 
-  private releaseActivePileTray() {
+  private releaseActiveSourceTray() {
     if (this.activePurgeBatch) return
-    const slug = this.activeSlug
-    if (!slug || slug.releasedCount >= slug.authorizedCount) return
-    const pileId = `${slug.source}1`
+    const grant = this.activeSourceGrant
+    if (!grant || grant.phase !== 'ACTIVE' || grant.pausedAtSec !== null || this.timeSec + EPS >= grant.expiresAtSec) return
+    const pileId = `${grant.source}1`
     const finalZone = this.piles.get(pileId)!.config.downstreamMdrCount - 1
     const tray = this.trays.find((candidate) => candidate.pilePlacement?.pileId === pileId && candidate.pilePlacement.component === 'MDR_DOWNSTREAM' && candidate.pilePlacement.zoneIndex === finalZone)
-    if (!tray || !slug.authorizedTrayIds.includes(tray.id)) return
-    const destination: ZonedId = slug.source === 'C' ? 'T' : 'PRE_T'
+    if (!tray) return
+    const destination: ZonedId = grant.source === 'C' ? 'T' : 'PRE_T'
     if (this.zonedOccupancy(destination)[0]) return
+    tray.sourceGrantId = grant.grantId
     this.moveToZonedEntrance(tray, destination)
-    slug.releasedCount += 1
-    this.cumulativeTransfers[slug.source] += 1
+    grant.releasedCount += 1
+    this.cumulativeTransfers[grant.source] += 1
     if (destination === 'T') this.recordEnteredT(tray)
   }
 
   private recordEnteredT(tray: Tray) {
-    const slug = this.activeSlug
-    if (!slug || !slug.authorizedTrayIds.includes(tray.id)) return
-    slug.enteredTCount += 1
-    if (tray.id === slug.finalAuthorizedTrayId) {
-      slug.status = 'COMPLETE'
-      slug.completedAtSec = this.timeSec
-      this.lastCompletedSlug = { ...slug, authorizedTrayIds: [...slug.authorizedTrayIds] }
-      this.slugCursor = slug.source === 'A' ? 'B' : slug.source === 'B' ? 'C' : 'A'
-      this.activeSlug = null
+    const grant = this.activeSourceGrant
+    if (!grant || tray.sourceGrantId !== grant.grantId) return
+    grant.enteredTCount += 1
+    tray.sourceGrantId = undefined
+    this.completeSourceGrantIfDrained()
+  }
+
+  private sourceIsTrulyEmpty(source: SourceId) {
+    return !this.trays.some((tray) => tray.pilePlacement?.pileId === `${source}1`)
+  }
+
+  private beginSourceGrantDraining() {
+    const grant = this.activeSourceGrant
+    if (!grant || grant.phase === 'DRAINING') return
+    grant.phase = 'DRAINING'
+    grant.pausedAtSec = null
+    grant.remainingSecWhenPaused = null
+    grant.drainingStartedAtSec = this.timeSec
+    this.completeSourceGrantIfDrained()
+  }
+
+  private completeSourceGrantIfDrained() {
+    const grant = this.activeSourceGrant
+    if (!grant || grant.phase !== 'DRAINING' || grant.enteredTCount !== grant.releasedCount) return
+    grant.completedAtSec = this.timeSec
+    this.lastCompletedSourceGrant = { ...grant }
+    this.sourceGrantCursor = grant.source === 'A' ? 'B' : grant.source === 'B' ? 'C' : 'A'
+    this.activeSourceGrant = null
+  }
+
+  private synchronizeSourceGrant() {
+    const grant = this.activeSourceGrant
+    if (!grant) return
+    if (grant.phase === 'DRAINING') {
+      this.completeSourceGrantIfDrained()
+      return
+    }
+    if (grant.pausedAtSec !== null) {
+      if (this.activePurgeBatch) return
+      grant.expiresAtSec = this.timeSec + (grant.remainingSecWhenPaused ?? 0)
+      grant.pausedAtSec = null
+      grant.remainingSecWhenPaused = null
+    }
+    if (this.timeSec + EPS >= grant.expiresAtSec || this.sourceIsTrulyEmpty(grant.source)) {
+      this.beginSourceGrantDraining()
+      return
+    }
+    if (this.activePurgeBatch) {
+      grant.remainingSecWhenPaused = Math.max(0, grant.expiresAtSec - this.timeSec)
+      grant.pausedAtSec = this.timeSec
     }
   }
 
@@ -1374,9 +1423,9 @@ export default class Milestone7Simulation {
       + this.inboundMissions.filter((mission) => Boolean(mission.inboundPayload)).length
     const physical = this.trays.length + robotCarriedTrayCount
     const mergeState: MergeState = {
-      nextPriority: this.slugCursor,
-      eligibleA: this.activeSlug?.source === 'A', eligibleB: this.activeSlug?.source === 'B', eligibleC: this.activeSlug?.source === 'C',
-      selectedSource: this.activeSlug?.source ?? 'NONE',
+      nextPriority: this.sourceGrantCursor,
+      eligibleA: this.activeSourceGrant?.source === 'A', eligibleB: this.activeSourceGrant?.source === 'B', eligibleC: this.activeSourceGrant?.source === 'C',
+      selectedSource: this.activeSourceGrant?.source ?? 'NONE',
       cumulativeTransfersA: this.cumulativeTransfers.A, cumulativeTransfersB: this.cumulativeTransfers.B, cumulativeTransfersC: this.cumulativeTransfers.C,
     }
     const dFinal = Boolean(this.zonedOccupancy('D')[ZONE_COUNTS.D - 1])
@@ -1451,12 +1500,12 @@ export default class Milestone7Simulation {
     const srsGlobalAvailable = Math.max(0, this.globalTarget() - srsGlobalCurrent - srsGlobalPending)
     const srsLanes = Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => {
       const laneMissions = this.missions.filter((mission) => mission.assignedExchanger === source && mission.state !== 'RELEASED')
-      const active = this.activeSlug?.source === source ? this.activeSlug : null
+      const active = this.activeSourceGrant?.source === source ? this.activeSourceGrant : null
       const localAvailable = this.positiveAvailability(`${source}1` as SrsPileId, srsCurrent)
       const downstreamPile = `${source}2` as 'A2' | 'B2' | 'C2'
       const downstreamAvailable = this.positiveAvailability('T', srsCurrent) + this.positiveAvailability('D', srsCurrent) + this.positiveAvailability(downstreamPile, srsCurrent)
       return [source, {
-        source, activeReleaseQuantity: this.activeSourceReleaseQuantities[source], targetSize: this.activeTargets[`${source}1` as 'A1' | 'B1' | 'C1'], currentCount: srsCurrent[`${source}1` as 'A1' | 'B1' | 'C1'],
+        source, targetSize: this.activeTargets[`${source}1` as 'A1' | 'B1' | 'C1'], currentCount: srsCurrent[`${source}1` as 'A1' | 'B1' | 'C1'],
         pendingDemand: laneMissions.length, lanePurgeDemand: this.lanePurgeDemand(source, srsCurrent), localAvailable, downstreamAvailable,
         laneMissionCapacity: Math.max(0, localAvailable + downstreamAvailable - laneMissions.length),
         pendingEmptyMissions: laneMissions.filter((mission) => mission.missionType === 'EMPTY').length,
@@ -1465,8 +1514,7 @@ export default class Milestone7Simulation {
         maturedCartbuildMissions: laneMissions.filter((mission) => mission.missionType === 'CARTBUILD' && mission.state === 'READY_AT_EXCHANGER').length,
         lastActualExchangerReleaseTime: this.outboundDiagnostics[source].releaseTimes.at(-1)?.timeSec ?? null,
         nextEligibleExchangerReleaseTime: Math.max(0, this.asrsLastRelease[source] + CARTBUILD_INTERVAL_SEC),
-        activeSourceBatch: Boolean(active), activeBatchConfiguredMaximum: active?.configuredMaximum ?? 0, frozenSourceBatchQuantity: active?.authorizedCount ?? 0,
-        sourceBatchReleasedCount: active?.releasedCount ?? 0, sourceBatchRemainingCount: active ? active.authorizedCount - active.releasedCount : 0,
+        ownsSourceGrant: Boolean(active),
       }]
     })) as SimulationStateWithProgress['srsControl']['lanes']
     const maturedQueues = Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => [source, this.maturedQueue(source).map((mission) => mission.robotId!).filter((robotId) => robotId !== undefined)])) as Record<SourceId, number[]>
@@ -1574,7 +1622,7 @@ export default class Milestone7Simulation {
       preDetrayerMdrA: pileCount('A', 'MDR_PRE_DETRAYER'), postDetrayerMdrA: pileCount('A', 'MDR_POST_DETRAYER'), beltCountA: pileCount('A', 'BELT'), downstreamMdrA: pileCount('A', 'MDR_DOWNSTREAM'), beltRunningA: beltDiagnostics[0].beltRunning,
       preDetrayerMdrB: pileCount('B', 'MDR_PRE_DETRAYER'), postDetrayerMdrB: pileCount('B', 'MDR_POST_DETRAYER'), beltCountB: pileCount('B', 'BELT'), downstreamMdrB: pileCount('B', 'MDR_DOWNSTREAM'), beltRunningB: beltDiagnostics[1].beltRunning,
       preDetrayerMdrC: pileCount('C', 'MDR_PRE_DETRAYER'), postDetrayerMdrC: pileCount('C', 'MDR_POST_DETRAYER'), beltCountC: pileCount('C', 'BELT'), downstreamMdrC: pileCount('C', 'MDR_DOWNSTREAM'), beltRunningC: beltDiagnostics[2].beltRunning,
-      pileAuthorizedExitA: this.activeSlug?.source === 'A', pileAuthorizedExitB: this.activeSlug?.source === 'B', pileAuthorizedExitC: this.activeSlug?.source === 'C',
+      pileAuthorizedExitA: this.activeSourceGrant?.source === 'A' && this.activeSourceGrant.phase === 'ACTIVE', pileAuthorizedExitB: this.activeSourceGrant?.source === 'B' && this.activeSourceGrant.phase === 'ACTIVE', pileAuthorizedExitC: this.activeSourceGrant?.source === 'C' && this.activeSourceGrant.phase === 'ACTIVE',
       beltDiagnostics,
       operatingSettings: { ...this.operatingSettings },
       cartbuildSystem: {
@@ -1584,7 +1632,21 @@ export default class Milestone7Simulation {
         cartonBalanceError: cartonIntroduced - cartonAttached - cartonOnConveyors - cartonConsumed,
       },
       srsControl: {
-        targets: { ...this.activeTargets }, sourceReleaseQuantities: { ...this.activeSourceReleaseQuantities }, tPurgeSettings: { ...this.activeTPurgeSettings }, current: { ...srsCurrent }, globalTarget: this.globalTarget(), globalCurrent: srsGlobalCurrent,
+        targets: { ...this.activeTargets }, sourceReleaseWindowSec: this.activeSourceReleaseWindowSec,
+        sourceGrant: {
+          configuredWindowSec: this.activeSourceReleaseWindowSec,
+          activeLane: this.activeSourceGrant?.source ?? null,
+          phase: this.activeSourceGrant?.phase ?? 'IDLE',
+          pausedForBypass: this.activeSourceGrant?.phase === 'ACTIVE' && this.activeSourceGrant.pausedAtSec !== null,
+          remainingWindowSec: this.activeSourceGrant?.phase === 'ACTIVE'
+            ? Math.max(0, this.activeSourceGrant.pausedAtSec !== null ? this.activeSourceGrant.remainingSecWhenPaused ?? 0 : this.activeSourceGrant.expiresAtSec - this.timeSec)
+            : 0,
+          releasedCount: this.activeSourceGrant?.releasedCount ?? 0,
+          enteredTCount: this.activeSourceGrant?.enteredTCount ?? 0,
+          drainingElapsedSec: this.activeSourceGrant?.phase === 'DRAINING' && this.activeSourceGrant.drainingStartedAtSec !== null ? this.timeSec - this.activeSourceGrant.drainingStartedAtSec : 0,
+          handoffWaitReason: this.activeSourceGrant?.phase === 'DRAINING' && this.activeSourceGrant.releasedCount > this.activeSourceGrant.enteredTCount ? 'PRE_T_DRAINING' : 'NONE',
+        },
+        tPurgeSettings: { ...this.activeTPurgeSettings }, current: { ...srsCurrent }, globalTarget: this.globalTarget(), globalCurrent: srsGlobalCurrent,
         globalPending: srsGlobalPending, globalAvailableCapacity: srsGlobalAvailable, planningCadenceSec: this.planningCadenceSec,
         nextPlanningTime: this.nextPlanningTime, planningCursor: this.asrsNextAssign, lanes: srsLanes,
         tBypassBatch: {
@@ -1594,8 +1656,8 @@ export default class Milestone7Simulation {
           authorizedTrayIds: [...(this.activePurgeBatch?.authorizedTrayIds ?? [])],
           enteredCount: this.activePurgeBatch?.enteredPurgeCount ?? 0,
           remainingCount: this.activePurgeBatch ? this.activePurgeBatch.authorizedCount - this.activePurgeBatch.enteredPurgeCount : 0,
-          sourceBatchPaused: Boolean(this.activeSlug && this.activePurgeBatch),
-          pausedSource: this.activeSlug && this.activePurgeBatch ? this.activeSlug.source : null,
+          sourceGrantPaused: Boolean(this.activeSourceGrant && this.activeSourceGrant.pausedAtSec !== null && this.activePurgeBatch),
+          pausedSource: this.activeSourceGrant && this.activePurgeBatch ? this.activeSourceGrant.source : null,
         },
       },
       returnSystem: {
@@ -1619,7 +1681,7 @@ export default class Milestone7Simulation {
       },
       segmentStats, movingCount: this.trays.filter((tray) => tray.status === 'MOVING').length, blockedCount: this.trays.filter((tray) => tray.status === 'BLOCKED').length,
       totalTraysCreated: this.totalTraysCreated, createdTrayCount: this.totalTraysCreated, physicalTrayCount: physical, consumedTrayCount: this.returnEnabled ? 0 : this.consumedCount, materialBalanceError: this.totalTraysCreated - physical - materialSinkCount,
-      slugCursor: this.slugCursor, activeSlug: this.activeSlug ? { ...this.activeSlug, authorizedTrayIds: [...this.activeSlug.authorizedTrayIds] } : null, lastCompletedSlug: this.lastCompletedSlug ? { ...this.lastCompletedSlug, authorizedTrayIds: [...this.lastCompletedSlug.authorizedTrayIds] } : null,
+      sourceGrantCursor: this.sourceGrantCursor, activeSourceGrant: this.activeSourceGrant ? { ...this.activeSourceGrant } : null, lastCompletedSourceGrant: this.lastCompletedSourceGrant ? { ...this.lastCompletedSourceGrant } : null,
       dEntranceAvailable: this.isDEntranceAvailable(), dFinalZoneOccupied: dFinal, korberNextConsumptionTime: this.nextConsumptionTime, korberLastConsumedTrayId: this.lastConsumedTrayId,
       zonedOccupancy: { PRE_T: this.zonedOccupancy('PRE_T').filter(Boolean).length, T: this.zonedOccupancy('T').filter(Boolean).length, D: this.zonedOccupancy('D').filter(Boolean).length },
       totalRouteDistance: this.segments.reduce((sum, segment) => sum + segment.lengthFt, 0),
