@@ -15,7 +15,7 @@ Milestone 14A delivers:
 
 Milestone 12 delivers:
 
-- Independent configurable A1/B1/C1 maximum source-release quantities
+- One configurable timed A1/B1/C1 source-release window
 - A configurable consecutive downstream T backup trigger and T-to-PURGE quantity
 - Selected-versus-active scenario controls with atomic time-zero application
 - An accessible eight-section operations sidebar with concise defaults and retained diagnostics
@@ -90,9 +90,9 @@ The operations panel exposes selected scenario targets separately from the activ
 
 Inputs accept integers from 1 through 999. Blank, nonnumeric, fractional, out-of-range, or otherwise invalid drafts remain visible, display validation, and disable **Start Scenario**. Editing pauses playback but does not reset the simulation or alter active engine targets. When selected and active values differ, the UI displays **Apply with Start Scenario**.
 
-SRS targets, source-release quantities, the T backup trigger, T purge quantity, operating toggles, and planning cadence are scenario settings. Editable selected values remain separate from the active values used by the engine. Editing any draft pauses playback while preserving current material, missions, robots, batches, timing, and accounting. Invalid drafts remain visible, show inline validation, and disable **Start Scenario**.
+SRS targets, the source-release window, the T backup trigger, T purge quantity, operating toggles, and planning cadence are scenario settings. Editable selected values remain separate from the active values used by the engine. Editing any draft pauses playback while preserving current material, missions, robots, batches, timing, and accounting. Invalid drafts remain visible, show inline validation, and disable **Start Scenario**.
 
-**Start Scenario** atomically applies every valid selected setting; clears prior physical and control state; initializes the new scenario at time zero; and runs immediate planning exactly once. **Reset** restores all eight SRS target defaults, A1/B1/C1 source quantities to 8/8/8, both T settings to 6/6, all four operating toggles to ON, the ten-second planning cadence, and deterministic material, mission, and robot initialization.
+**Start Scenario** atomically applies every valid selected setting; clears prior physical and control state; initializes the new scenario at time zero; and runs immediate planning exactly once. **Reset** restores all eight SRS target defaults, the ten-second source-release window, both T settings to 6/6, all four operating toggles to ON, the ten-second planning cadence, and deterministic material, mission, and robot initialization.
 
 ### Target-based initialization
 
@@ -128,39 +128,21 @@ Lane `PurgeDemand` is a signed SRS control quantity and is distinct from the con
 
 The schematic displays each source lane's authoritative `PendingDemand` beside A1, B1, and C1. These values come directly from unreleased ASRS missions in the live engine snapshot and update during playback independently of `CurrentCount`, `PurgeDemand`, physical occupancy, and release settings.
 
-### Throughput audit
+### Physical timing
 
-At 120 ft/min, a 30-inch one-zone pitch takes 1.25 seconds and therefore implies a theoretical unconstrained rate of 2,880 trays/hour. The PLC engineer identified 1,800 containers/hour as the straight-conveyor technical capability, equivalent to a two-second effective pitch. The enforcement mechanism is not yet confirmed; Milestone 14A adds no throttle and does not assume discharge pitch, spacing, photo-eye logic, motor-speed constraints, or transfer delays.
+At 120 ft/min, a 30-inch one-zone pitch takes 1.25 seconds and therefore implies a theoretical unconstrained rate of 2,880 trays/hour. The source-release window controls how long a selected lane may initiate departures; it does not throttle individual trays, alter conveyor speed, or change physical transfer timing.
 
-Timed A1/B1/C1 release grants, the 1,800 CPH enforcement mechanism, discrete `PurgeDemand` command sequencing, and X merge batching remain deferred to Milestones 14B/14C pending PLC confirmation.
+Discrete `PurgeDemand` command sequencing and X merge batching remain deferred to Milestone 14C.
 
 ## Milestone 12 release controls
 
-### Configurable A1/B1/C1 source batches
+### Configurable A1/B1/C1 timed grants
 
-The Release Control group exposes independent maximum source authorizations:
+The Release Control group exposes one shared **Source release window**. It defaults to 10 simulated seconds and accepts finite decimal values from 0.1 through 600 seconds. Start Scenario applies a valid selected value atomically; Reset restores ten seconds.
 
-| Source | Default | Valid range |
-|---|---:|---:|
-| A1 | 8 trays | 1–45 |
-| B1 | 8 trays | 1–38 |
-| C1 | 8 trays | 1–38 |
+Lane selection remains highest positive `PurgeDemand`, then a physically full source, then round-robin tie resolution. The selected lane owns an active permission window and is not preempted by later priority changes. Ordinary physical blockage consumes window time; an active T bypass pauses an unexpired window and preserves its exact remaining duration. New arrivals may join while the grant is active if they physically reach the source discharge.
 
-For positive lane `PurgeDemand`, authorization is:
-
-```text
-authorized source quantity =
-  min(positive PurgeDemand, active configured source quantity, physically available source trays)
-```
-
-When D is available and lane `PurgeDemand` is not positive:
-
-```text
-authorized source quantity =
-  min(active configured source quantity, physically available source trays)
-```
-
-This is a maximum, so existing partial-batch behavior remains. Authorization freezes the exact quantity and tray identities; later arrivals cannot join. A frozen source batch finishes before source arbitration is recalculated. Source selection priority remains highest positive `PurgeDemand`, then a physically full source, then round-robin tie resolution.
+Expiry stops new departures but does not revoke downstream transit. A/B trays already released into `PRE_T` drain into T before ownership transfers; C departures enter T directly. Consequently, total ownership may extend beyond the configured release-window duration. Physical vacancy, T/D controls, 1.25-second MDR movement, belt motion, identity, ordering, and accounting remain authoritative throughout.
 
 ### Configurable T-to-PURGE batches
 
@@ -179,7 +161,7 @@ Examples:
 - Trigger 6, quantity 10, and eight trays available freezes 8.
 - Trigger 6, quantity 10, and twelve trays available freezes 10.
 
-Authorization freezes the exact quantity and downstream-priority tray identities. Payload state does not exclude a physical tray. Later arrivals cannot join; D reopening or backup depth falling below the trigger does not cancel the batch; and physical PURGE blocking delays transfers without cancelling or resizing it. While a T purge batch is active, source authorization and source release are paused. The active source batch retains its exact source, configured maximum, authorized quantity, tray identities, released count, and remaining count. After T purge completion, that exact same source batch resumes without reconstruction or reauthorization.
+Authorization freezes the exact quantity and downstream-priority tray identities. Payload state does not exclude a physical tray. Later arrivals cannot join; D reopening or backup depth falling below the trigger does not cancel the batch; and physical PURGE blocking delays transfers without cancelling or resizing it. While a T purge batch is active, an unexpired active source grant is paused with its exact remaining duration. Previously released source trays may continue draining, and the same grant resumes after bypass completion without accumulated release credits.
 
 ## Milestone 12 operations sidebar
 
