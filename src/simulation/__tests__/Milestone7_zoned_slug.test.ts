@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import SimulationEngine from '../SimulationEngine'
-import type { SourceId, Tray } from '../types'
+import type { SourceId, SourceReleaseGrantState, Tray } from '../types'
 
 const SEGMENTS = [
   { id: 'A1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 24 },
@@ -11,7 +11,6 @@ const SEGMENTS = [
   { id: 'D', lengthFt: 235, speedFtPerMin: 120, maxOccupancy: 94 },
 ]
 const INTERVAL = 3600 / 1050
-
 const createEngine = () => new SimulationEngine(SEGMENTS)
 const countPile = (trays: Tray[], source: SourceId) => trays.filter((tray) => tray.pilePlacement?.pileId === `${source}1`).length
 const assertInvariants = (engine: SimulationEngine) => {
@@ -24,44 +23,34 @@ const assertInvariants = (engine: SimulationEngine) => {
   for (const tray of state.trays) expect(Number(Boolean(tray.pilePlacement)) + Number(Boolean(tray.zonePlacement))).toBe(1)
 }
 
-describe('Milestone 7 topology and reset', () => {
-  test('uses shared PRE_T, direct C routing, and authoritative 6/12/92 zones', () => {
+describe('Milestone 7 topology and physical timing retained by 14B', () => {
+  test('uses shared PRE_T, direct C routing, authoritative zones, and idle grant reset', () => {
     const state = createEngine().getState()
     expect(state.segments.map(({ id, nextSegmentId, maxOccupancy }) => [id, nextSegmentId, maxOccupancy])).toEqual([
-      ['A1', 'PRE_T', 45], ['B1', 'PRE_T', 38], ['C1', 'T', 38],
-      ['PRE_T', 'T', 6], ['T', 'D', 12], ['D', undefined, 92],
+      ['A1', 'PRE_T', 45], ['B1', 'PRE_T', 38], ['C1', 'T', 38], ['PRE_T', 'T', 6], ['T', 'D', 12], ['D', undefined, 92],
     ])
     expect(state.zonedOccupancy).toEqual({ PRE_T: 0, T: 0, D: 92 })
-    expect(countPile(state.trays, 'A')).toBe(24)
-    expect(countPile(state.trays, 'B')).toBe(16)
-    expect(countPile(state.trays, 'C')).toBe(16)
-    expect(state.slugCursor).toBe('A')
-    expect(state.activeSlug).toBeNull()
+    expect([countPile(state.trays, 'A'), countPile(state.trays, 'B'), countPile(state.trays, 'C')]).toEqual([24, 16, 16])
+    expect(state.sourceGrantCursor).toBe('A')
+    expect(state.activeSourceGrant).toBeNull()
     expect(state.trays).toHaveLength(148)
     expect(state.createdTrayCount).toBe(248)
     assertInvariants(createEngine())
   })
 
-  test('reset is deterministic and clears active slug state', () => {
-    const engine = createEngine()
-    const initial = engine.getState().trays.map((tray) => tray.id)
+  test('reset clears grant state deterministically', () => {
+    const engine = createEngine(); const initial = engine.getState().trays.map((tray) => tray.id)
     engine.step(160)
-    expect(engine.getState().lastCompletedSlug).not.toBeNull()
+    expect(engine.getState().lastCompletedSourceGrant).not.toBeNull()
     engine.reset()
-    const reset = engine.getState()
-    expect(reset.trays.map((tray) => tray.id)).toEqual(initial)
-    expect(reset.slugCursor).toBe('A')
-    expect(reset.activeSlug).toBeNull()
-    expect(reset.lastCompletedSlug).toBeNull()
+    expect(engine.getState().trays.map((tray) => tray.id)).toEqual(initial)
+    expect(engine.getState()).toMatchObject({ sourceGrantCursor: 'A', activeSourceGrant: null, lastCompletedSourceGrant: null })
   })
-})
 
-describe('Milestone 7 D and Körber physics', () => {
-  test('waits a full interval and consumes only the final-zone tray', () => {
+  test('Körber waits its independent interval and consumes only the final zone', () => {
     const engine = createEngine()
     const finalId = engine.getState().trays.find((tray) => tray.zonePlacement?.conveyorId === 'D' && tray.zonePlacement.zoneIndex === 91)!.id
-    engine.step(INTERVAL - 0.01)
-    expect(engine.getState().korber.totalConsumed).toBe(0)
+    engine.step(INTERVAL - 0.01); expect(engine.getState().korber.totalConsumed).toBe(0)
     engine.step(0.02)
     const state = engine.getState()
     expect(state.korber.totalConsumed).toBe(1)
@@ -70,7 +59,7 @@ describe('Milestone 7 D and Körber physics', () => {
     assertInvariants(engine)
   })
 
-  test('vacancy propagates with timed transfers and entrance stays blocked until it arrives', () => {
+  test('D vacancy propagates with timed transfers and entrance stays blocked until it arrives', () => {
     const engine = createEngine()
     const runtime = (engine as unknown as { milestone7: { trays: Tray[]; missions: unknown[] } }).milestone7
     runtime.trays = runtime.trays.filter((tray) => tray.zonePlacement?.conveyorId === 'D')
@@ -88,7 +77,7 @@ describe('Milestone 7 D and Körber physics', () => {
     expect(engine.getState().dEntranceAvailable).toBe(true)
   })
 
-  test('starvation consumes the next final-zone arrival once and schedules a fresh interval', () => {
+  test('Körber starvation consumes the next final-zone arrival once and schedules a fresh interval', () => {
     const engine = createEngine()
     const runtime = (engine as unknown as { milestone7: { trays: Tray[]; nextConsumptionTime: number } }).milestone7
     const final = runtime.trays.find((tray) => tray.zonePlacement?.conveyorId === 'D' && tray.zonePlacement.zoneIndex === 91)!
@@ -105,125 +94,50 @@ describe('Milestone 7 D and Körber physics', () => {
     expect(engine.getState().korber.totalConsumed).toBe(1)
   })
 
-  test('continuously supplied Körber preserves its mathematical interval without 3.5-second drift', () => {
+  test('continuously supplied Körber preserves exactly 1,050 consumptions per hour', () => {
     const engine = createEngine()
     engine.step(3600)
     expect(engine.getState().korber.totalConsumed).toBe(1050)
   })
-})
 
-describe('Milestone 7 slug arbitration and invariants', () => {
   test('96 accumulated MDR intervals retain 120-second timing within one tick', () => {
     type Runtime = { trays: Tray[]; totalTraysCreated: number; consumedCount: number; nextConsumptionTime: number }
     const elapsedFor = (conveyorId: 'PRE_T' | 'D', finalZone: number) => {
-      const engine = createEngine()
-      const runtime = (engine as unknown as { milestone7: Runtime }).milestone7
+      const engine = createEngine(); const runtime = (engine as unknown as { milestone7: Runtime }).milestone7
       runtime.trays = [{ id: 1, currentSegmentId: conveyorId, positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', zonePlacement: { conveyorId, zoneIndex: 0 } }]
-      runtime.totalTraysCreated = 1
-      runtime.consumedCount = 0
-      runtime.nextConsumptionTime = Number.MAX_VALUE
+      runtime.totalTraysCreated = 1; runtime.consumedCount = 0; runtime.nextConsumptionTime = Number.MAX_VALUE
       while (engine.getState().trays[0].zonePlacement!.zoneIndex < finalZone) engine.step(0.05)
       return engine.getState().timeSec
     }
     const elapsed = elapsedFor('D', 91) + elapsedFor('PRE_T', 5)
-    expect(elapsed).toBeGreaterThanOrEqual(120)
-    expect(elapsed).toBeLessThanOrEqual(120.1)
+    expect(elapsed).toBeGreaterThanOrEqual(120); expect(elapsed).toBeLessThanOrEqual(120.1)
   })
+})
 
-  test('skips a short lane for a full lane, otherwise freezes the cursor lane partial slug', () => {
-    type Runtime = {
-      trays: Tray[]
-      missions: unknown[]
-      slugCursor: SourceId
-      activeSlug: null
-      authorizeSlugIfPossible: () => void
-    }
-    const first = createEngine()
-    const firstRuntime = (first as unknown as { milestone7: Runtime }).milestone7
-    firstRuntime.trays = firstRuntime.trays.filter((tray) => tray.zonePlacement?.conveyorId !== 'D' || tray.zonePlacement.zoneIndex !== 0)
-    firstRuntime.missions = []
-    firstRuntime.trays = firstRuntime.trays.filter((tray) => tray.pilePlacement?.pileId !== 'A1' || tray.id <= 7)
-    firstRuntime.trays.push(...Array.from({ length: 22 }, (_, index) => ({ id: 1000 + index, currentSegmentId: 'B1', positionFt: 1, status: 'BLOCKED' as const, createdAtSec: 0, originSourceId: 'B' as const, pilePlacement: { pileId: 'B1', component: 'MDR_DOWNSTREAM' as const, zoneIndex: index % 8 } })))
-    firstRuntime.slugCursor = 'A'
-    firstRuntime.authorizeSlugIfPossible()
-    expect(first.getState().activeSlug?.source).toBe('B')
-    expect(first.getState().activeSlug?.authorizedCount).toBe(8)
-
-    const second = createEngine()
-    const secondRuntime = (second as unknown as { milestone7: Runtime }).milestone7
-    secondRuntime.trays = secondRuntime.trays.filter((tray) => tray.zonePlacement?.conveyorId !== 'D' || tray.zonePlacement.zoneIndex !== 0)
-    secondRuntime.missions = []
-    secondRuntime.trays = secondRuntime.trays.filter((tray) => {
-      if (tray.pilePlacement?.pileId === 'A1') return tray.id <= 5
-      if (tray.pilePlacement?.pileId === 'B1') return tray.id <= 29
-      if (tray.pilePlacement?.pileId === 'C1') return tray.id <= 44
-      return true
-    })
-    secondRuntime.slugCursor = 'A'
-    secondRuntime.authorizeSlugIfPossible()
-    const frozen = second.getState().activeSlug!
-    expect(frozen.source).toBe('A')
-    expect(frozen.authorizedCount).toBe(5)
-    const replacementId = 999
-    secondRuntime.trays.push({ id: replacementId, currentSegmentId: 'A1', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', pilePlacement: { pileId: 'A1', component: 'MDR_PRE_DETRAYER', zoneIndex: 0 } })
-    expect(second.getState().activeSlug?.authorizedTrayIds).toEqual(frozen.authorizedTrayIds)
-    expect(second.getState().activeSlug?.authorizedTrayIds).not.toContain(replacementId)
-  })
-
-  test('runs exclusive frozen full slugs round-robin A, B, C', () => {
-    const engine = createEngine()
-    const completed: SourceId[] = []
-    let priorCompletion: number | null = null
-    for (let tick = 0; tick < 3000 && completed.length < 3; tick++) {
-      engine.step(0.1)
-      const state = engine.getState()
-      const completedAt = state.lastCompletedSlug?.completedAtSec ?? null
-      if (completedAt !== null && completedAt !== priorCompletion) {
-        completed.push(state.lastCompletedSlug!.source)
-        expect(state.lastCompletedSlug!.authorizedCount).toBe(8)
-        expect(state.lastCompletedSlug!.releasedCount).toBe(8)
-        expect(state.lastCompletedSlug!.enteredTCount).toBe(8)
-        priorCompletion = completedAt
-      }
-      if (state.activeSlug) {
-        const allowed = state.activeSlug.source === 'C' ? ['T', 'D'] : ['PRE_T', 'T', 'D']
-        for (const tray of state.trays.filter((candidate) => state.activeSlug!.authorizedTrayIds.includes(candidate.id) && candidate.zonePlacement)) {
-          expect(allowed).toContain(tray.zonePlacement!.conveyorId)
-        }
-      }
-    }
-    expect(completed).toEqual(['A', 'B', 'C'])
-  })
-
-  test('cursor and ownership remain fixed through blocked partial progress', () => {
-    const engine = createEngine()
-    engine.step(125)
-    const before = engine.getState()
-    expect(before.activeSlug).not.toBeNull()
-    const source = before.activeSlug!.source
-    const cursor = before.slugCursor
-    const authorized = [...before.activeSlug!.authorizedTrayIds]
-    const inactiveCounts = [countPile(before.trays, 'B'), countPile(before.trays, 'C')]
+describe('Milestone 14B grant arbitration compatibility', () => {
+  test('keeps ownership and cursor fixed during an active grant', () => {
+    const engine = createEngine(); engine.step(125); const before = engine.getState()
+    expect(before.activeSourceGrant).not.toBeNull()
+    const owner = before.activeSourceGrant!.source; const cursor = before.sourceGrantCursor
     engine.step(1)
-    const after = engine.getState()
-    expect(after.slugCursor).toBe(cursor)
-    expect(after.activeSlug?.source).toBe(source)
-    expect(after.activeSlug?.authorizedTrayIds).toEqual(authorized)
-    expect([countPile(after.trays, 'B'), countPile(after.trays, 'C')]).toEqual(inactiveCounts)
+    expect(engine.getState().activeSourceGrant?.source).toBe(owner)
+    expect(engine.getState().sourceGrantCursor).toBe(cursor)
   })
 
-  test('long deterministic run preserves identity, placement, occupancy, and material balance', () => {
-    const engine = createEngine()
-    const seen = new Set<SourceId>()
-    let maximumPhysical = 0
+  test('long deterministic run preserves identities and accounting across all grant owners', () => {
+    const engine = createEngine(); const seen = new Set<SourceId>(); let maximumPhysical = 0
     for (let second = 0; second < 700; second++) {
-      engine.step(1)
-      const state = engine.getState()
+      engine.step(1); const state = engine.getState()
       maximumPhysical = Math.max(maximumPhysical, state.trays.length)
-      if (state.lastCompletedSlug) seen.add(state.lastCompletedSlug.source)
+      if (state.lastCompletedSourceGrant) seen.add(state.lastCompletedSourceGrant.source)
       assertInvariants(engine)
     }
     expect([...seen].sort()).toEqual(['A', 'B', 'C'])
     expect(maximumPhysical).toBeLessThanOrEqual(148)
   }, 30_000)
+
+  test('grant state type carries explicit lifecycle timing', () => {
+    const grant: SourceReleaseGrantState = { grantId: 1, source: 'A', releasedCount: 0, enteredTCount: 0, startedAtSec: 0, expiresAtSec: 10, pausedAtSec: null, remainingSecWhenPaused: null, drainingStartedAtSec: null, completedAtSec: null, phase: 'ACTIVE' }
+    expect(grant.phase).toBe('ACTIVE')
+  })
 })

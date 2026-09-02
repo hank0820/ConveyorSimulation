@@ -36,17 +36,17 @@ describe('Milestone 12 integrated release acceptance', () => {
       diagram: document.querySelector('.conveyor-diagram')?.outerHTML,
     }
 
-    const sourceDraft = screen.getByRole('spinbutton', { name: 'A1 batch quantity' })
+    const sourceDraft = screen.getByRole('spinbutton', { name: 'Source release window' })
     await user.clear(sourceDraft)
-    await user.type(sourceDraft, '10')
+    await user.type(sourceDraft, '12.5')
     const tDraft = screen.getByRole('spinbutton', { name: 'T purge quantity' })
     await user.clear(tDraft)
     await user.type(tDraft, '9')
 
     expect(within(section('simulation')).getByText('PAUSED')).toBeTruthy()
-    expect(sourceDraft).toHaveProperty('value', '10')
+    expect(sourceDraft).toHaveProperty('value', '12.5')
     expect(tDraft).toHaveProperty('value', '9')
-    expect(section('scenario-configuration').textContent).toContain('Active: 8')
+    expect(section('scenario-configuration').textContent).toContain('Active: 10s')
     expect(section('scenario-configuration').textContent).toContain('Active: 6')
     expect(section('scenario-configuration').textContent).toContain('Apply with Start Scenario')
     expect(section('system-status').textContent?.replace('PAUSED', 'RUNNING')).toBe(before.status)

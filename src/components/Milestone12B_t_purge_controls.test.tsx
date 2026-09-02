@@ -5,7 +5,7 @@ import SimulationEngine from '../simulation/SimulationEngine'
 import SimulationControls from './SimulationControls'
 
 const SEGMENTS = [['A1',103.5,45],['B1',86,38],['C1',86,38],['PRE_T',15,6],['T',30,12],['D',230,92],['PURGE',30,12],['E',70,28],['X',10,4],['S',20,8],['A2',136,58],['B2',118.5,51],['C2',118.5,51]].map(([id,lengthFt,maxOccupancy]) => ({ id: String(id), lengthFt: Number(lengthFt), speedFtPerMin: 120, maxOccupancy: Number(maxOccupancy) }))
-const render = (overrides = {}) => renderToStaticMarkup(createElement(SimulationControls, { state: new SimulationEngine(SEGMENTS).getState(), playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onStartScenario: vi.fn(), selectedSourceReleases: { A: '8', B: '8', C: '8' }, selectedTPurge: { backupTrigger: '6', purgeQuantity: '6' }, onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, collapsed: false, onToggleCollapsed: vi.fn(), ...overrides }))
+const render = (overrides = {}) => renderToStaticMarkup(createElement(SimulationControls, { state: new SimulationEngine(SEGMENTS).getState(), playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onStartScenario: vi.fn(), selectedSourceReleaseWindow: '10', selectedTPurge: { backupTrigger: '6', purgeQuantity: '6' }, onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, collapsed: false, onToggleCollapsed: vi.fn(), ...overrides }))
 
 describe('Milestone 12B T purge controls', () => {
   test('renders selected and active defaults with understandable helper text and diagnostics', () => {

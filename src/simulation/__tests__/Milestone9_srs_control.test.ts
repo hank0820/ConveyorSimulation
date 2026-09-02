@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import SimulationEngine from '../SimulationEngine'
-import type { ActiveSlugState, Mission, PurgeBatchState, SourceId, Tray } from '../types'
+import type { Mission, PurgeBatchState, SourceId, SourceReleaseGrantState, Tray } from '../types'
 
 const SEGMENTS = [
   ['A1',81,24],['B1',81,16],['C1',81,16],['PRE_T',20,8],['T',30,12],['D',235,94],['PURGE',15,6],['E',87.5,35],['X',12.5,5],['S',20,8],['A2',90,36],['B2',72.5,29],['C2',72.5,29],['CARTBUILD_A',75,30],['CARTBUILD_B',75,30],['CARTBUILD_C',75,30],
@@ -18,12 +18,12 @@ type Runtime = {
   trays: Tray[]
   missions: Mission[]
   asrsNextAssign: SourceId
-  slugCursor: SourceId
-  activeSlug: ActiveSlugState | null
+  sourceGrantCursor: SourceId
+  activeSourceGrant: SourceReleaseGrantState | null
   activePurgeBatch: PurgeBatchState | null
   nextPlanningTime: number
   planPendingDemand: () => void
-  authorizeSlugIfPossible: () => void
+  authorizeSourceGrantIfPossible: () => void
   authorizePurgeIfNeeded: () => void
 }
 const runtimeOf = (engine: SimulationEngine) => (engine as unknown as { milestone7: Runtime }).milestone7
@@ -203,7 +203,7 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
     expect(srs(engine).lanes.A.lanePurgeDemand).toBe(expected)
   })
 
-  test('source arbitration chooses highest positive PurgeDemand and freezes the exact capped quantity', () => {
+  test('source arbitration chooses highest positive PurgeDemand for the timed grant', () => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
     runtime.trays = [
@@ -215,27 +215,25 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
       ...Array.from({ length: 30 }, (_, index) => ({ missionId: index + 1, assignedExchanger: 'A' as const, missionType: 'CARTBUILD' as const, createdAtSec: 0, readyAtSec: 180, state: 'RETRIEVING' as const })),
       ...Array.from({ length: 10 }, (_, index) => ({ missionId: 100 + index, assignedExchanger: 'B' as const, missionType: 'CARTBUILD' as const, createdAtSec: 0, readyAtSec: 180, state: 'RETRIEVING' as const })),
     ]
-    runtime.slugCursor = 'B'
-    runtime.authorizeSlugIfPossible()
-    expect(engine.getState().activeSlug).toMatchObject({ source: 'A', authorizedCount: 3, releasedCount: 0 })
-    expect(engine.getState().activeSlug?.authorizedTrayIds).toEqual([1, 2, 3])
+    runtime.sourceGrantCursor = 'B'
+    runtime.authorizeSourceGrantIfPossible()
+    expect(engine.getState().activeSourceGrant).toMatchObject({ source: 'A', phase: 'ACTIVE', releasedCount: 0 })
   })
 
   test.each([
-    [1, 24, true, 1],
-    [3, 24, true, 3],
-    [12, 24, true, 8],
-    [6, 0, false, 6],
-    [10, 0, false, 8],
-  ])('source authorization with %i trays, %i pending, D blocked=%s freezes %i', (trayCount, pending, dBlocked, expected) => {
+    [1, 24, true, true],
+    [12, 24, true, true],
+    [6, 0, false, true],
+    [10, 0, true, false],
+  ])('source grant with %i trays, %i pending, D blocked=%s starts=%s', (trayCount, pending, dBlocked, expected) => {
     const engine = new SimulationEngine(SEGMENTS)
     const runtime = runtimeOf(engine)
     runtime.trays = Array.from({ length: trayCount }, (_, index) => pileTray(index + 1, 'A', 'MDR_DOWNSTREAM', 14 - index))
     if (dBlocked) runtime.trays.push(zonedTray(500, 'D', 0))
     runtime.missions = Array.from({ length: pending }, (_, index) => ({ missionId: index + 1, assignedExchanger: 'A' as const, missionType: 'EMPTY' as const, createdAtSec: 0, readyAtSec: 180, state: 'RETRIEVING' as const }))
-    runtime.slugCursor = 'A'
-    runtime.authorizeSlugIfPossible()
-    expect(engine.getState().activeSlug).toMatchObject({ source: 'A', authorizedCount: expected })
+    runtime.sourceGrantCursor = 'A'
+    runtime.authorizeSourceGrantIfPossible()
+    expect(Boolean(engine.getState().activeSourceGrant)).toBe(expected)
   })
 
   test('physical fullness then source round robin resolve non-positive PurgeDemand ties', () => {
@@ -246,15 +244,15 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
       ...Array.from({ length: 38 }, (_, index) => pileTray(30 + index, 'B', index < 5 ? 'MDR_PRE_DETRAYER' : index < 10 ? 'MDR_POST_DETRAYER' : 'MDR_DOWNSTREAM', index < 5 ? index : index < 10 ? index - 5 : (index - 10) % 8)),
     ]
     runtime.missions = []
-    runtime.slugCursor = 'A'
-    runtime.authorizeSlugIfPossible()
-    expect(engine.getState().activeSlug?.source).toBe('B')
+    runtime.sourceGrantCursor = 'A'
+    runtime.authorizeSourceGrantIfPossible()
+    expect(engine.getState().activeSourceGrant?.source).toBe('B')
 
-    runtime.activeSlug = null
+    runtime.activeSourceGrant = null
     runtime.trays = [pileTray(1, 'A', 'MDR_DOWNSTREAM', 14), pileTray(2, 'B', 'MDR_DOWNSTREAM', 6)]
-    runtime.slugCursor = 'B'
-    runtime.authorizeSlugIfPossible()
-    expect(engine.getState().activeSlug?.source).toBe('B')
+    runtime.sourceGrantCursor = 'B'
+    runtime.authorizeSourceGrantIfPossible()
+    expect(engine.getState().activeSourceGrant?.source).toBe('B')
   })
 
   test('T-full bypass freezes six downstream-most physical tray identities regardless of payload', () => {
@@ -287,12 +285,12 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
       sawDetraying ||= Object.values(state.cartbuildSystem.detrayers).some((detrayer) => detrayer.splitCount > 0)
       if (sawMaturedRelease && state.srsControl.tBypassBatch.active) {
         sawBypass = true
-        if (state.activeSlug) {
+        if (state.activeSourceGrant) {
           sawPausedSource = true
-          interruptedSource ??= state.activeSlug.source
+          interruptedSource ??= state.activeSourceGrant.source
         }
       }
-      if (interruptedSource && state.lastCompletedSlug?.source === interruptedSource && !state.srsControl.tBypassBatch.active) sawResumedCompletion = true
+      if (interruptedSource && state.lastCompletedSourceGrant?.source === interruptedSource && !state.srsControl.tBypassBatch.active) sawResumedCompletion = true
       expect(state.materialBalanceError).toBe(0)
       expect(state.cartbuildSystem.cartonBalanceError).toBe(0)
       expect(new Set(state.trays.map((tray) => tray.id)).size).toBe(state.trays.length)
