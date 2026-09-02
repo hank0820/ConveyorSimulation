@@ -6,7 +6,7 @@ import SimulationControls from './SimulationControls'
 
 const SEGMENTS = [['A1',103.5,45],['B1',86,38],['C1',86,38],['PRE_T',15,6],['T',30,12],['D',230,92],['PURGE',30,12],['E',70,28],['X',10,4],['S',20,8],['A2',136,58],['B2',118.5,51],['C2',118.5,51],['CARTBUILD_A',75,30],['CARTBUILD_B',75,30],['CARTBUILD_C',75,30]].map(([id,lengthFt,maxOccupancy]) => ({ id: String(id), lengthFt: Number(lengthFt), speedFtPerMin: 120, maxOccupancy: Number(maxOccupancy) }))
 const state = () => new SimulationEngine(SEGMENTS).getState()
-const render = (overrides = {}) => renderToStaticMarkup(createElement(SimulationControls, { state: state(), playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onStartScenario: vi.fn(), selectedTargets: { A1:'24',B1:'16',C1:'16',T:'6',D:'92',A2:'36',B2:'29',C2:'29' }, selectedSourceReleases: { A:'8',B:'8',C:'8' }, selectedTPurge: { backupTrigger:'6',purgeQuantity:'6' }, onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, collapsed: false, onToggleCollapsed: vi.fn(), ...overrides }))
+const render = (overrides = {}) => renderToStaticMarkup(createElement(SimulationControls, { state: state(), playing: false, playbackSpeed: 1, setPlaybackSpeed: vi.fn(), onPlayPause: vi.fn(), onStep: vi.fn(), onReset: vi.fn(), onStartScenario: vi.fn(), selectedTargets: { A1:'24',B1:'16',C1:'16',T:'6',D:'92',A2:'36',B2:'29',C2:'29' }, selectedSourceReleaseWindow: '10', selectedTPurge: { backupTrigger:'6',purgeQuantity:'6' }, onOperatingSettingChange: vi.fn(), onPlanningCadenceChange: vi.fn(), configurationNotice: null, collapsed: false, onToggleCollapsed: vi.fn(), ...overrides }))
 const sectionIds = (markup: string) => [...markup.matchAll(/data-sidebar-section="([^"]+)"/g)].map((match) => match[1])
 const section = (markup: string, id: string) => markup.match(new RegExp(`<section[^>]*data-sidebar-section="${id}"[\\s\\S]*?</section>`))?.[0] ?? ''
 
@@ -61,7 +61,7 @@ describe('Milestone 12C operations sidebar organization', () => {
 
   test('expanded SRS and ASRS sections retain detailed diagnostics', () => {
     const markup = render({ defaultOpenSections: ['srs-control','asrs-robots'] })
-    for (const text of ['Target / current','PurgeDemand','Source batch','T bypass','Cartbuild reservations']) expect(section(markup, 'srs-control')).toContain(text)
+    for (const text of ['Target / current','PurgeDemand','Source grant','T bypass','Cartbuild reservations']) expect(section(markup, 'srs-control')).toContain(text)
     for (const text of ['Traveling outbound','Matured / queued','Shift / TAKE','Dual utilization']) expect(section(markup, 'asrs-robots')).toContain(text)
   })
 

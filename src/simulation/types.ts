@@ -20,6 +20,7 @@ export interface Tray {
   returnDestination?: ReturnDestination
   purgeMember?: boolean
   korberHeld?: boolean
+  sourceGrantId?: number
   // optional physical placement inside a logical hybrid pile
   pilePlacement?: {
     pileId: string // e.g. 'A1','B1','C1'
@@ -122,17 +123,20 @@ export interface CartbuildSystemState {
   cartonBalanceError: number
 }
 
-export interface ActiveSlugState {
+export type SourceGrantPhase = 'ACTIVE' | 'DRAINING'
+
+export interface SourceReleaseGrantState {
+  grantId: number
   source: SourceId
-  configuredMaximum: number
-  authorizedCount: number
   releasedCount: number
-  authorizedTrayIds: number[]
   enteredTCount: number
-  finalAuthorizedTrayId: number
-  authorizedAtSec: number
+  startedAtSec: number
+  expiresAtSec: number
+  pausedAtSec: number | null
+  remainingSecWhenPaused: number | null
+  drainingStartedAtSec: number | null
   completedAtSec: number | null
-  status: 'ACTIVE' | 'COMPLETE'
+  phase: SourceGrantPhase
 }
 
 export interface ConveyorSegmentConfig {
@@ -324,7 +328,6 @@ export interface CompletedOutboundCycle {
 
 export type SrsPileId = 'A1' | 'B1' | 'C1' | 'T' | 'D' | 'A2' | 'B2' | 'C2'
 export type SrsTargets = Readonly<Record<SrsPileId, number>>
-export type SourceReleaseQuantities = Readonly<Record<SourceId, number>>
 export interface TPurgeSettings {
   backupTrigger: number
   purgeQuantity: number
@@ -332,7 +335,6 @@ export interface TPurgeSettings {
 
 export interface SrsLaneDiagnostic {
   source: SourceId
-  activeReleaseQuantity: number
   targetSize: number
   currentCount: number
   pendingDemand: number
@@ -346,16 +348,25 @@ export interface SrsLaneDiagnostic {
   maturedCartbuildMissions: number
   lastActualExchangerReleaseTime: number | null
   nextEligibleExchangerReleaseTime: number
-  activeSourceBatch: boolean
-  activeBatchConfiguredMaximum: number
-  frozenSourceBatchQuantity: number
-  sourceBatchReleasedCount: number
-  sourceBatchRemainingCount: number
+  ownsSourceGrant: boolean
+}
+
+export interface SourceGrantDiagnostic {
+  configuredWindowSec: number
+  activeLane: SourceId | null
+  phase: 'IDLE' | SourceGrantPhase
+  pausedForBypass: boolean
+  remainingWindowSec: number
+  releasedCount: number
+  enteredTCount: number
+  drainingElapsedSec: number
+  handoffWaitReason: 'NONE' | 'PRE_T_DRAINING'
 }
 
 export interface SrsControlState {
   targets: SrsTargets
-  sourceReleaseQuantities: SourceReleaseQuantities
+  sourceReleaseWindowSec: number
+  sourceGrant: SourceGrantDiagnostic
   tPurgeSettings: Readonly<TPurgeSettings>
   current: Record<SrsPileId, number>
   globalTarget: number
@@ -374,7 +385,7 @@ export interface SrsControlState {
     authorizedTrayIds: number[]
     enteredCount: number
     remainingCount: number
-    sourceBatchPaused: boolean
+    sourceGrantPaused: boolean
     pausedSource: SourceId | null
   }
 }
@@ -512,9 +523,9 @@ export interface SimulationState {
   operatingSettings: OperatingSettings
   cartbuildSystem: CartbuildSystemState
   srsControl: SrsControlState
-  slugCursor: SourceId
-  activeSlug: ActiveSlugState | null
-  lastCompletedSlug: ActiveSlugState | null
+  sourceGrantCursor: SourceId
+  activeSourceGrant: SourceReleaseGrantState | null
+  lastCompletedSourceGrant: SourceReleaseGrantState | null
   dEntranceAvailable: boolean
   dFinalZoneOccupied: boolean
   korberNextConsumptionTime: number

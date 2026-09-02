@@ -313,6 +313,32 @@
   border-radius: 3px;
   font: 700 11px var(--mono);
 }
+.srs-target-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 9px;
+}
+.srs-target-controls > legend { padding: 0 4px; }
+.srs-target-controls > small { grid-column: 1 / -1; line-height: 1.45; }
+.srs-target-controls > label {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  font-size: 11px;
+}
+.srs-target-controls input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 5px;
+  border: 1px solid #aeb9c2;
+  border-radius: 3px;
+  font: 700 11px var(--mono);
+}
+.srs-target-controls label > small { line-height: 1.4; }
 
 @media (max-width: 1500px) {
   .simulation-app { grid-template-columns: minmax(0, 1fr) 290px; }
