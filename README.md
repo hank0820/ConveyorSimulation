@@ -132,7 +132,7 @@ The schematic displays each source lane's authoritative `PendingDemand` beside A
 
 At 120 ft/min, a 30-inch one-zone pitch takes 1.25 seconds and therefore implies a theoretical unconstrained rate of 2,880 trays/hour. The source-release window controls how long a selected lane may initiate departures; it does not throttle individual trays, alter conveyor speed, or change physical transfer timing.
 
-Discrete `PurgeDemand` command sequencing and X merge batching remain deferred to Milestone 14C.
+Milestone 14C executes positive lane `PurgeDemand` as a discrete frozen request. At grant selection the engine snapshots `max(0, CurrentCount - TargetSize + PendingDemand)` as a count, not a tray-ID list. Only a successful source departure satisfies one unit; failed or blocked attempts receive no credit. New physical arrivals may satisfy the remaining count during the same non-preemptive timed grant. Satisfaction does not end the grant, but once the frozen request is satisfied, ordinary release again requires D entrance availability. Later live `PurgeDemand` increases or decreases wait for future arbitration and never resize the active frozen request. Expiry and true source-empty completion preserve any remainder as an observable terminal outcome without creating debt for a later grant.
 
 ## Milestone 12 release controls
 
@@ -151,17 +151,21 @@ The T backup trigger defaults to 6 zones, and the T purge quantity defaults to 6
 Backup depth is consecutive physical occupancy measured upstream from D, beginning at T's D-facing end. It is not arbitrary or total T occupancy. A new T purge batch requires D entrance to be blocked, the active configured consecutive downstream backup depth to be reached, and no existing T purge batch to be active.
 
 ```text
-frozen T purge quantity =
-  min(active configured T purge quantity, trays physically available in T)
+T purge authorization requires:
+  trays physically available in T >= active configured T purge quantity
 ```
 
 Examples:
 
-- Trigger 6, quantity 10, and six trays available freezes 6.
-- Trigger 6, quantity 10, and eight trays available freezes 8.
-- Trigger 6, quantity 10, and twelve trays available freezes 10.
+- Trigger 6, quantity 10, and six trays available does not authorize.
+- Trigger 6, quantity 10, and eight trays available does not authorize.
+- Trigger 6, quantity 10, and twelve trays available freezes exactly 10.
 
-Authorization freezes the exact quantity and downstream-priority tray identities. Payload state does not exclude a physical tray. Later arrivals cannot join; D reopening or backup depth falling below the trigger does not cancel the batch; and physical PURGE blocking delays transfers without cancelling or resizing it. While a T purge batch is active, an unexpired active source grant is paused with its exact remaining duration. Previously released source trays may continue draining, and the same grant resumes after bypass completion without accumulated release credits.
+Authorization freezes the exact configured quantity and downstream-priority tray identities. Payload state does not exclude a physical tray. Later arrivals cannot join; D reopening or backup depth falling below the trigger does not cancel the batch; and physical PURGE blocking delays transfers without cancelling or resizing it. While frozen members divert from T, an unexpired active source grant is paused with its exact remaining duration. Previously released source trays may continue draining, and the same grant resumes as soon as every member has entered PURGE.
+
+Each T-purge batch has a deterministic ID retained by every frozen member through PURGE and X. The existing strict per-transfer E-over-PURGE priority remains authoritative; there is no persistent X owner or fairness alternation, so E trays may interleave between purge members. Diagnostics expose the batch phase, frozen IDs, counts entering and exiting X, immediate starvation behind an eligible E transfer, and an integer E-priority deferral count. The count increments once when a ready PURGE member loses an open-X admission to an eligible E tray; it is an event count, not elapsed wait time. Ordinary blockage by an occupied X entrance is not starvation. Batch history becomes complete only after every frozen member has successfully exited X toward the return sorter destination.
+
+T-purge batches are serialized through X: only one batch may exist at a time, and a later batch cannot authorize until every member of the prior batch has exited X and its active ownership clears. Source ACTIVE time resumes earlier, as soon as every frozen member has entered PURGE, while downstream observation continues. The lifecycle is `AUTHORIZED → DIVERTING_TO_PURGE → RETURNING_THROUGH_X → COMPLETE`.
 
 ## Milestone 12 operations sidebar
 
@@ -231,6 +235,8 @@ The full system is rendered on one responsive SVG with a `1600 × 1040` logical 
 
 Elevation, real spiral pitch, diameter, and exact revolutions are not simulated.
 
+An independent 1,800 CPH throughput throttle is not modeled and remains outside project requirements; physical conveyor timing and the existing equipment rates remain authoritative.
+
 ## Routing and control behavior retained from earlier milestones
 
 Milestones 11 and 12 do not change:
@@ -272,11 +278,11 @@ Both balance errors are exposed in diagnostics and remain zero in validated scen
 
 ## Validation status
 
-The latest completed Milestone 12 validation passed:
+The latest completed Milestone 14C validation passed:
 
-- 390/390 deterministic tests across 36 files
-- Focused Milestone 12A–12C tests
-- Direct interaction and regression coverage verifies draft-edit pause with live-state preservation, keyboard-operable sidebar disclosures, expansion-state persistence through playback, **Start Scenario**, and **Reset**, exact source-batch interruption and resumption, and prevention of duplicate T authorization
+- 458/458 deterministic tests across 38 files with one worker
+- Focused Milestone 14C, 14B, and 12B controller tests
+- Direct and regression coverage verifies frozen `PurgeDemand` requests, successful-departure-only satisfaction, terminal remainder outcomes, full-quantity T authorization, deterministic downstream membership, source resumption after PURGE entry, strict E priority, starvation diagnostics, X-exit completion, scenario reset, and snapshot immutability
 - Lint passed
 - Standalone TypeScript compilation passed
 - Production build passed

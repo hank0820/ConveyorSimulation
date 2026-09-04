@@ -39,10 +39,51 @@ describe('Milestone 12A Release Control UI', () => {
     ['DRAINING', false, 'DRAINING'],
   ] as const)('renders authoritative %s paused=%s diagnostics', (phase, pausedForBypass, label) => {
     const state = new SimulationEngine(SEGMENTS).getState()
-    state.srsControl.sourceGrant = { configuredWindowSec: 10, activeLane: 'A', phase, pausedForBypass, remainingWindowSec: phase === 'ACTIVE' ? 4.5 : 0, releasedCount: 3, enteredTCount: 2, drainingElapsedSec: phase === 'DRAINING' ? 1.5 : 0, handoffWaitReason: phase === 'DRAINING' ? 'PRE_T_DRAINING' : 'NONE' }
+    state.srsControl.sourceGrant = { configuredWindowSec: 10, activeLane: 'A', phase, pausedForBypass, remainingWindowSec: phase === 'ACTIVE' ? 4.5 : 0, releasedCount: 3, enteredTCount: 2, drainingElapsedSec: phase === 'DRAINING' ? 1.5 : 0, handoffWaitReason: phase === 'DRAINING' ? 'PRE_T_DRAINING' : 'NONE', selectionReason: 'NORMAL', purgeDemandRequestedCount: 0, purgeDemandSatisfiedCount: 0, purgeDemandRemainingCount: 0, purgeDemandRequestedAtSec: null, purgeDemandCompletedAtSec: null, purgeDemandOutcome: 'NOT_APPLICABLE', purgeDemandRecordKind: 'NONE' }
     const markup = render({ state, defaultOpenSections: ['srs-control'] })
     expect(markup).toContain(`data-source-grant-phase="${phase}"`)
     expect(markup).toContain(label)
     expect(markup).toContain('Released / entered T')
+  })
+
+  test('renders neutral IDLE demand and no-batch states in four accessible diagnostic groups', () => {
+    const markup = render({ defaultOpenSections: ['srs-control'] })
+    expect(markup).toContain('aria-label="Source timed grant"')
+    expect(markup).toContain('aria-label="Frozen source PurgeDemand execution"')
+    expect(markup).toContain('aria-label="T-bypass batch"')
+    expect(markup).toContain('aria-label="X and PURGE downstream progress"')
+    expect(markup).toContain('No active demand execution')
+    expect(markup).toContain('No active or completed T-bypass batch')
+    expect(markup).not.toContain('0/0 · PENDING')
+  })
+
+  test('renders authoritative ACTIVE demand progress without calculating it in React', () => {
+    const state = new SimulationEngine(SEGMENTS).getState()
+    Object.assign(state.srsControl.sourceGrant, { activeLane: 'B', phase: 'ACTIVE', selectionReason: 'POSITIVE_PURGE_DEMAND', purgeDemandRequestedCount: 7, purgeDemandSatisfiedCount: 3, purgeDemandRemainingCount: 4, purgeDemandRequestedAtSec: 1.25, purgeDemandCompletedAtSec: null, purgeDemandOutcome: null, purgeDemandRecordKind: 'ACTIVE' })
+    const markup = render({ state, defaultOpenSections: ['srs-control'] })
+    for (const expected of ['Requested</span><span class="value ">7', 'Satisfied</span><span class="value ">3', 'Remaining</span><span class="value ">4', 'Requested at</span><span class="value ">1.3s', 'Outcome</span><span class="value ">PENDING']) expect(markup).toContain(expected)
+  })
+
+  test('labels completed demand history with its outcome and timestamps', () => {
+    const state = new SimulationEngine(SEGMENTS).getState()
+    Object.assign(state.srsControl.sourceGrant, { selectionReason: 'POSITIVE_PURGE_DEMAND', purgeDemandRequestedCount: 5, purgeDemandSatisfiedCount: 2, purgeDemandRemainingCount: 3, purgeDemandRequestedAtSec: 2, purgeDemandCompletedAtSec: 9.5, purgeDemandOutcome: 'EXPIRED_WITH_REMAINDER', purgeDemandRecordKind: 'HISTORY' })
+    const markup = render({ state, defaultOpenSections: ['srs-control'] })
+    expect(markup).toContain('COMPLETED HISTORY')
+    expect(markup).toContain('EXPIRED_WITH_REMAINDER')
+    expect(markup).toContain('9.5s')
+  })
+
+  test('renders active and completed T batches from one internally consistent record', () => {
+    const state = new SimulationEngine(SEGMENTS).getState()
+    Object.assign(state.srsControl.tBypassBatch, { active: false, recordKind: 'HISTORY', batchId: 4, phase: 'COMPLETE', configuredQuantity: 6, authorizedCount: 6, authorizedTrayIds: [11, 10, 9, 8, 7, 6], enteredCount: 6, remainingCount: 0, enteredXCount: 6, exitedXCount: 6, downstreamRemainingCount: 0, purgeEPriorityDeferralCount: 12, authorizedAtSec: 3, completedAtSec: 20 })
+    let markup = render({ state, defaultOpenSections: ['srs-control'] })
+    expect(markup).toContain('Batch / phase: 4 / COMPLETE')
+    expect(markup).toContain('Frozen members: 6 (11, 10, 9, 8, 7, 6)')
+    expect(markup).toContain('X entered / exited: 6 / 6')
+    expect(markup).toContain('E-priority deferrals: 12')
+    Object.assign(state.srsControl.tBypassBatch, { active: true, recordKind: 'ACTIVE', batchId: 5, phase: 'AUTHORIZED', authorizedTrayIds: [21, 20, 19, 18, 17, 16], enteredCount: 0, enteredXCount: 0, exitedXCount: 0, downstreamRemainingCount: 6, authorizedAtSec: 21, completedAtSec: null })
+    markup = render({ state, defaultOpenSections: ['srs-control'] })
+    expect(markup).toContain('Batch / phase: 5 / AUTHORIZED')
+    expect(markup).not.toContain('Batch / phase: 4 / COMPLETE')
   })
 })
