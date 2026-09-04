@@ -60,14 +60,17 @@ describe('Milestone 12B configurable T purge', () => {
     expect(runtime.activePurgeBatch?.authorizedCount).toBe(6)
   })
 
-  test.each([[6, 6], [8, 8], [12, 10]] as const)('trigger 6 quantity 10 with %i available freezes %i', (available, expected) => {
+  test.each([[6, false], [8, false], [12, true]] as const)('trigger 6 quantity 10 with %i available authorizes: %s', (available, authorizes) => {
     const engine = start({ backupTrigger: 6, purgeQuantity: 10 })
     const zones = Array.from({ length: available }, (_, index) => 12 - available + index)
     const runtime = arrange(engine, zones, 10)
     runtime.authorizePurgeIfNeeded()
-    expect(runtime.activePurgeBatch?.authorizedCount).toBe(expected)
-    expect(runtime.activePurgeBatch?.authorizedTrayIds).toHaveLength(expected)
-    expect(runtime.activePurgeBatch?.authorizedTrayIds).toContain(11)
+    if (!authorizes) expect(runtime.activePurgeBatch).toBeNull()
+    else {
+      expect(runtime.activePurgeBatch?.authorizedCount).toBe(10)
+      expect(runtime.activePurgeBatch?.authorizedTrayIds).toHaveLength(10)
+      expect(runtime.activePurgeBatch?.authorizedTrayIds).toContain(11)
+    }
   })
 
   test('frozen identities and quantity survive later arrivals, D reopening, and a lower backup depth', () => {
@@ -94,7 +97,7 @@ describe('Milestone 12B configurable T purge', () => {
     const engine = start({ backupTrigger: 6, purgeQuantity: 6 })
     const runtime = arrange(engine, [6, 7, 8, 9, 10, 11])
     runtime.trays.push({ id: 300, currentSegmentId: 'B1', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'B', loadState: 'EMPTY', pilePlacement: { pileId: 'B1', component: 'MDR_PRE_DETRAYER', zoneIndex: 0 } })
-    runtime.activeSourceGrant = { grantId: 1, source: 'B', releasedCount: 2, enteredTCount: 2, startedAtSec: 0, expiresAtSec: 10, pausedAtSec: null, remainingSecWhenPaused: null, drainingStartedAtSec: null, completedAtSec: null, phase: 'ACTIVE' }
+    runtime.activeSourceGrant = { grantId: 1, source: 'B', releasedCount: 2, enteredTCount: 2, startedAtSec: 0, expiresAtSec: 10, pausedAtSec: null, remainingSecWhenPaused: null, drainingStartedAtSec: null, completedAtSec: null, phase: 'ACTIVE', selectionReason: 'NORMAL', purgeDemandExecution: null }
     runtime.authorizePurgeIfNeeded()
     runtime.synchronizeSourceGrant()
     expect(runtime.activeSourceGrant).toMatchObject({ source: 'B', pausedAtSec: 0, remainingSecWhenPaused: 10 })
@@ -105,13 +108,13 @@ describe('Milestone 12B configurable T purge', () => {
   })
 
   test('diagnostics expose depth, blockage, qualification, identities, and active quantities', () => {
-    const engine = start({ backupTrigger: 6, purgeQuantity: 10 })
+    const engine = start({ backupTrigger: 6, purgeQuantity: 6 })
     const runtime = arrange(engine, [6, 7, 8, 9, 10, 11])
     let state = engine.getState()
     expect(state.srsControl.tBypassBatch).toMatchObject({ consecutiveDownstreamBackupDepth: 6, dEntranceBlocked: true, triggerQualifies: true })
     runtime.authorizePurgeIfNeeded()
     state = engine.getState()
-    expect(state.srsControl.tPurgeSettings).toEqual({ backupTrigger: 6, purgeQuantity: 10 })
+    expect(state.srsControl.tPurgeSettings).toEqual({ backupTrigger: 6, purgeQuantity: 6 })
     expect(state.srsControl.tBypassBatch).toMatchObject({ active: true, triggerQualifies: false, remainingCount: 6, authorizedTrayIds: [12,11,10,9,8,7] })
   })
 
@@ -125,15 +128,15 @@ describe('Milestone 12B configurable T purge', () => {
     expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([2])
 
     runtime.processZonedBoundaries()
-    expect(runtime.activePurgeBatch).toBeNull()
-    expect(runtime.lastCompletedPurgeBatch).toMatchObject({ authorizedTrayIds: [2], authorizedCount: 1, status: 'COMPLETE' })
+    expect(runtime.activePurgeBatch).toMatchObject({ authorizedTrayIds: [2], phase: 'RETURNING_THROUGH_X' })
+    expect(runtime.lastCompletedPurgeBatch).toBeNull()
     runtime.processZonedConveyors(1.25)
-    expect(runtime.activePurgeBatch).toBeNull()
+    expect(runtime.activePurgeBatch).not.toBeNull()
 
     const remaining = runtime.trays.find((tray) => tray.id === 1)!
     remaining.zonePlacement = { conveyorId: 'T', zoneIndex: 11 }
     remaining.positionFt = 28.75
     runtime.authorizePurgeIfNeeded()
-    expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([1])
+    expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([2])
   })
 })

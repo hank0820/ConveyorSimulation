@@ -26,6 +26,7 @@ type Runtime = {
   nextConsumptionTime: number
   timeSec: number
   sorterCursor: ReturnDestination
+  returnAssignments: Record<ReturnDestination, { EMPTY: number; FULL: number }>
   processReturnBoundaries: () => void
   processExchangerSinks: () => void
 }
@@ -143,7 +144,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     expect(state.returnSystem.lastCompletedPurgeBatch?.authorizedTrayIds).not.toContain(21)
     expect(entrySequence).toEqual([12, 11, 10, 9, 8, 7])
     expect(new Set(entrySequence).size).toBe(6)
-    expect(state.trays.filter((tray) => tray.purgeMember).map((tray) => tray.id).sort((a, b) => b - a)).toEqual([12, 11, 10, 9, 8, 7])
+    expect(state.trays.filter((tray) => tray.purgeMember || tray.tPurgeBatchId !== undefined)).toEqual([])
     for (const id of [12, 11, 10, 9, 8, 7]) expect(state.trays.find((tray) => tray.id === id)?.zonePlacement?.conveyorId).not.toBe('D')
     assertPhysical(state)
   })
@@ -225,6 +226,64 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     expect(frozen.zonePlacement?.conveyorId).toBe('S')
     expect(frozen.returnDestination).toBe('A2')
     expect(runtime.sorterCursor).toBe('B2')
+  })
+
+  test('sorter remains cursor-first regardless of assignment totals and unavailable inspections', () => {
+    const engine = createEngine()
+    const runtime = runtimeOf(engine)
+    runtime.trays = []
+    runtime.totalTraysCreated = 0
+
+    // Historical totals are diagnostics only and must never influence routing.
+    runtime.returnAssignments.A2.EMPTY = 100
+    runtime.returnAssignments.B2.EMPTY = 0
+    runtime.returnAssignments.C2.EMPTY = 50
+    const first = zoned(1, 'X', 3)
+    runtime.trays = [first]
+    runtime.totalTraysCreated = 1
+    runtime.processReturnBoundaries()
+    expect(first.returnDestination).toBe('A2')
+    expect(runtime.sorterCursor).toBe('B2')
+
+    // With every path unavailable, inspection does not advance the cursor.
+    runtime.trays = [
+      zoned(2, 'X', 3),
+      zoned(3, 'S', 0),
+      inbound(4, 'C2', 'MDR_SORTER_SIDE', 0),
+    ]
+    runtime.totalTraysCreated = 4
+    runtime.processReturnBoundaries()
+    expect(runtime.trays.find(({ id }) => id === 2)?.returnDestination).toBeUndefined()
+    expect(runtime.sorterCursor).toBe('B2')
+
+    // B2 is first from the cursor once S opens; the successful selection—not
+    // either unavailable inspection above—advances the cursor to C2.
+    runtime.trays = runtime.trays.filter(({ id }) => id !== 3)
+    runtime.processReturnBoundaries()
+    expect(runtime.trays.find(({ id }) => id === 2)?.returnDestination).toBe('B2')
+    expect(runtime.sorterCursor).toBe('C2')
+
+    runtime.trays = []
+    const c = zoned(5, 'X', 3)
+    runtime.trays.push(c)
+    runtime.processReturnBoundaries()
+    expect(c.returnDestination).toBe('C2')
+    expect(runtime.sorterCursor).toBe('A2')
+
+    // A2, which was unavailable during the earlier inspection, re-enters at
+    // its normal cursor position when it becomes available.
+    runtime.trays = []
+    const a = zoned(6, 'X', 3)
+    runtime.trays.push(a)
+    runtime.processReturnBoundaries()
+    expect(a.returnDestination).toBe('A2')
+    expect(runtime.sorterCursor).toBe('B2')
+
+    engine.reset()
+    expect(engine.getState().returnSystem.sorterCursor).toBe('A2')
+    engine.startScenario(engine.getOperatingSettings(), 10)
+    expect(engine.getState().returnSystem.sorterCursor).toBe('A2')
+    assertPhysical(engine.getState())
   })
 
   test('independent exchanger sinks accept only final-zone trays at least eight seconds apart and retain history', () => {
@@ -311,8 +370,8 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     expect(prior.returnSystem.mergeCounts.eToXFull).toBeGreaterThan(0)
     expect(prior.returnSystem.mergeCounts.purgeToXEmpty).toBeGreaterThan(0)
     for (const destination of ['A2', 'B2', 'C2'] as const) expect(prior.returnSystem.assignments[destination].EMPTY + prior.returnSystem.assignments[destination].FULL).toBeGreaterThan(0)
-    const totals = Object.values(prior.returnSystem.assignments).map((counts) => counts.EMPTY + counts.FULL)
-    expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1)
+    const assigned = Object.values(prior.returnSystem.assignments).reduce((total, counts) => total + counts.EMPTY + counts.FULL, 0)
+    expect(assigned + prior.returnSystem.conveyorOccupancy.X).toBe(prior.returnSystem.mergeCounts.eToXFull + prior.returnSystem.mergeCounts.purgeToXEmpty)
     engine.reset()
     const resetA = engine.getState()
     engine.step(10)

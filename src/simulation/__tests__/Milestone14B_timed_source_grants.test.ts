@@ -11,7 +11,7 @@ type Runtime = {
 const runtimeOf = (engine: SimulationEngine) => (engine as unknown as { milestone7: Runtime }).milestone7
 const pile = (id: number, source: SourceId, zoneIndex: number): Tray => ({ id, currentSegmentId: `${source}1`, positionFt: (zoneIndex + 0.5) * 2.5, status: 'BLOCKED', createdAtSec: 0, originSourceId: source, loadState: 'EMPTY', pilePlacement: { pileId: `${source}1`, component: 'MDR_DOWNSTREAM', zoneIndex } })
 const zoned = (id: number, conveyorId: 'PRE_T' | 'T' | 'D' | 'PURGE', zoneIndex: number): Tray => ({ id, currentSegmentId: conveyorId, positionFt: (zoneIndex + 0.5) * 2.5, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', loadState: 'EMPTY', zonePlacement: { conveyorId, zoneIndex } })
-const purge = (at: number): PurgeBatchState => ({ authorizedTrayIds: [900], authorizedCount: 1, divertedCount: 0, enteredPurgeCount: 0, authorizedAtSec: at, completedAtSec: null, status: 'ACTIVE' })
+const purge = (at: number): PurgeBatchState => ({ batchId: 1, authorizedTrayIds: [900], authorizedCount: 1, divertedCount: 0, enteredPurgeCount: 0, authorizedAtSec: at, completedAtSec: null, status: 'ACTIVE', phase: 'AUTHORIZED', diversionCompletedAtSec: null, enteredXCount: 0, exitedXCount: 0, purgeStarvedBehindE: false, purgeEPriorityDeferralCount: 0 })
 const isolated = (windowSec = 10) => {
   const engine = new SimulationEngine(SEGMENTS); engine.startScenario(engine.getOperatingSettings(), 10, undefined, windowSec)
   const runtime = runtimeOf(engine); runtime.trays = [pile(1, 'A', 14)]; runtime.activeSourceGrant = null; runtime.lastCompletedSourceGrant = null; runtime.sourceGrantCursor = 'A'

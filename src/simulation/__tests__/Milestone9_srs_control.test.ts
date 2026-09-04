@@ -290,7 +290,7 @@ describe('Milestone 9 SRS PendingDemand controller', () => {
           interruptedSource ??= state.activeSourceGrant.source
         }
       }
-      if (interruptedSource && state.lastCompletedSourceGrant?.source === interruptedSource && !state.srsControl.tBypassBatch.active) sawResumedCompletion = true
+      if (interruptedSource && state.lastCompletedSourceGrant?.source === interruptedSource && !state.srsControl.tBypassBatch.sourceGrantPaused) sawResumedCompletion = true
       expect(state.materialBalanceError).toBe(0)
       expect(state.cartbuildSystem.cartonBalanceError).toBe(0)
       expect(new Set(state.trays.map((tray) => tray.id)).size).toBe(state.trays.length)
