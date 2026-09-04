@@ -181,6 +181,7 @@ export default class Milestone7Simulation {
   private sorterBlockedReason: string | null = null
   private activePurgeBatch: PurgeBatchState | null = null
   private lastCompletedPurgeBatch: PurgeBatchState | null = null
+  private purgeBatchCounter = 0
   private returnAssignments: Record<ReturnDestination, { EMPTY: number; FULL: number }> = { A2: { EMPTY: 0, FULL: 0 }, B2: { EMPTY: 0, FULL: 0 }, C2: { EMPTY: 0, FULL: 0 } }
   private returnMergeCounts = { eToXFull: 0, purgeToXEmpty: 0, blockedE: 0, blockedPurge: 0 }
   private exchangerAcceptanceTimes: Record<ReturnDestination, number[]> = { A2: [], B2: [], C2: [] }
@@ -278,6 +279,7 @@ export default class Milestone7Simulation {
     this.sorterBlockedReason = null
     this.activePurgeBatch = null
     this.lastCompletedPurgeBatch = null
+    this.purgeBatchCounter = 0
     this.returnAssignments = { A2: { EMPTY: 0, FULL: 0 }, B2: { EMPTY: 0, FULL: 0 }, C2: { EMPTY: 0, FULL: 0 } }
     this.returnMergeCounts = { eToXFull: 0, purgeToXEmpty: 0, blockedE: 0, blockedPurge: 0 }
     this.exchangerAcceptanceTimes = { A2: [], B2: [], C2: [] }
@@ -553,21 +555,20 @@ export default class Milestone7Simulation {
     }
     const tFinal = this.zonedOccupancy('T')[ZONE_COUNTS.T - 1]
     if (tFinal) {
-      const ownsPurge = Boolean(this.activePurgeBatch?.authorizedTrayIds.includes(tFinal.id))
+      const ownsPurge = Boolean(this.purgeDiversionActive() && this.activePurgeBatch?.authorizedTrayIds.includes(tFinal.id))
       if (ownsPurge) {
         if (!this.zonedOccupancy('PURGE')[0]) {
           this.moveToZonedEntrance(tFinal, 'PURGE')
           tFinal.purgeMember = true
           this.activePurgeBatch!.divertedCount += 1
           this.activePurgeBatch!.enteredPurgeCount += 1
+          this.activePurgeBatch!.phase = 'DIVERTING_TO_PURGE'
           if (this.activePurgeBatch!.enteredPurgeCount === this.activePurgeBatch!.authorizedCount) {
-            this.activePurgeBatch!.status = 'COMPLETE'
-            this.activePurgeBatch!.completedAtSec = this.timeSec
-            this.lastCompletedPurgeBatch = { ...this.activePurgeBatch!, authorizedTrayIds: [...this.activePurgeBatch!.authorizedTrayIds] }
-            this.activePurgeBatch = null
+            this.activePurgeBatch!.phase = 'RETURNING_THROUGH_X'
+            this.activePurgeBatch!.diversionCompletedAtSec = this.timeSec
           }
         }
-      } else if (!this.activePurgeBatch && !this.zonedOccupancy('D')[0]) {
+      } else if (!this.purgeDiversionActive() && !this.zonedOccupancy('D')[0]) {
         this.moveToZonedEntrance(tFinal, 'D')
       }
     }
@@ -581,13 +582,22 @@ export default class Milestone7Simulation {
     const selected = t.filter((tray): tray is Tray => Boolean(tray))
       .sort((a, b) => b.zonePlacement!.zoneIndex - a.zonePlacement!.zoneIndex)
       .slice(0, this.activeTPurgeSettings.purgeQuantity)
-    if (!selected.length) return
+    if (selected.length !== this.activeTPurgeSettings.purgeQuantity) return
     this.activePurgeBatch = {
+      batchId: ++this.purgeBatchCounter,
       authorizedTrayIds: selected.map((tray) => tray.id), authorizedCount: selected.length,
       divertedCount: 0, enteredPurgeCount: 0, authorizedAtSec: this.timeSec,
-      completedAtSec: null, status: 'ACTIVE',
+      completedAtSec: null, status: 'ACTIVE', phase: 'AUTHORIZED', diversionCompletedAtSec: null,
+      enteredXCount: 0, exitedXCount: 0, purgeStarvedBehindE: false, purgeEPriorityDeferralCount: 0,
     }
-    for (const tray of selected) tray.purgeMember = true
+    for (const tray of selected) {
+      tray.purgeMember = true
+      tray.tPurgeBatchId = this.activePurgeBatch.batchId
+    }
+  }
+
+  private purgeDiversionActive() {
+    return Boolean(this.activePurgeBatch && this.activePurgeBatch.phase !== 'RETURNING_THROUGH_X' && this.activePurgeBatch.phase !== 'COMPLETE')
   }
 
   private consecutiveDownstreamTBackupDepth(t = this.zonedOccupancy('T')) {
@@ -601,12 +611,19 @@ export default class Milestone7Simulation {
     const xOpen = !this.zonedOccupancy('X')[0]
     const eReady = this.zonedOccupancy('E')[ZONE_COUNTS.E - 1]
     const purgeReady = this.zonedOccupancy('PURGE')[ZONE_COUNTS.PURGE - 1]
+    const purgeStarvedBehindE = Boolean(xOpen && eReady && purgeReady?.tPurgeBatchId === this.activePurgeBatch?.batchId)
+    if (this.activePurgeBatch) {
+      this.activePurgeBatch.purgeStarvedBehindE = purgeStarvedBehindE
+      if (purgeStarvedBehindE) this.activePurgeBatch.purgeEPriorityDeferralCount += 1
+    }
     if (xOpen && eReady) {
       this.moveToZonedEntrance(eReady, 'X')
       this.returnMergeCounts.eToXFull += 1
     } else if (xOpen && purgeReady) {
       this.moveToZonedEntrance(purgeReady, 'X')
       this.returnMergeCounts.purgeToXEmpty += 1
+      const batch = this.activePurgeBatch
+      if (batch && purgeReady.tPurgeBatchId === batch.batchId) batch.enteredXCount = (batch.enteredXCount ?? 0) + 1
     } else if (!xOpen) {
       if (eReady) this.returnMergeCounts.blockedE += 1
       if (purgeReady) this.returnMergeCounts.blockedPurge += 1
@@ -627,6 +644,20 @@ export default class Milestone7Simulation {
           this.returnAssignments[destination][xFinal.loadState ?? 'EMPTY'] += 1
           if (direct) this.moveToInboundEntrance(xFinal, 'C2')
           else this.moveToZonedEntrance(xFinal, 'S')
+          const batch = this.activePurgeBatch
+          if (batch && xFinal.tPurgeBatchId === batch.batchId) {
+            batch.exitedXCount = (batch.exitedXCount ?? 0) + 1
+            xFinal.tPurgeBatchId = undefined
+            xFinal.purgeMember = false
+            if (batch.exitedXCount === batch.authorizedCount) {
+              batch.status = 'COMPLETE'
+              batch.phase = 'COMPLETE'
+              batch.completedAtSec = this.timeSec
+              batch.purgeStarvedBehindE = false
+              this.lastCompletedPurgeBatch = { ...batch, authorizedTrayIds: [...batch.authorizedTrayIds] }
+              this.activePurgeBatch = null
+            }
+          }
           this.sorterCursor = RETURN_DESTINATIONS[(RETURN_DESTINATIONS.indexOf(destination) + 1) % RETURN_DESTINATIONS.length]
           this.sorterSelectedDestination = destination
         } else {
@@ -849,7 +880,7 @@ export default class Milestone7Simulation {
   }
 
   private authorizeSourceGrantIfPossible() {
-    if (this.activePurgeBatch || this.activeSourceGrant) return
+    if (this.purgeDiversionActive() || this.activeSourceGrant) return
     const order: SourceId[] = ['A', 'B', 'C']
     const start = order.indexOf(this.sourceGrantCursor)
     const cyclic = Array.from({ length: 3 }, (_, index) => order[(start + index) % 3])
@@ -860,13 +891,17 @@ export default class Milestone7Simulation {
     if (!eligible.length) return
     const highestPositive = Math.max(0, ...eligible.map((source) => this.lanePurgeDemand(source, current)))
     let source: SourceId | undefined
+    let selectionReason: SourceReleaseGrantState['selectionReason'] = 'NORMAL'
     if (highestPositive > 0) source = cyclic.find((candidate) => eligible.includes(candidate) && this.lanePurgeDemand(candidate, current) === highestPositive)
+    if (source) selectionReason = 'POSITIVE_PURGE_DEMAND'
     if (!source) {
       const physicallyFull = eligible.filter((candidate) => {
         const capacity = this.segments.find((segment) => segment.id === `${candidate}1`)?.maxOccupancy ?? 0
         return current[`${candidate}1` as 'A1' | 'B1' | 'C1'] >= capacity
       })
-      source = cyclic.find((candidate) => physicallyFull.includes(candidate)) ?? cyclic.find((candidate) => eligible.includes(candidate))
+      source = cyclic.find((candidate) => physicallyFull.includes(candidate))
+      if (source) selectionReason = 'FULL'
+      else source = cyclic.find((candidate) => eligible.includes(candidate))
     }
     if (!source) return
     this.activeSourceGrant = {
@@ -881,11 +916,16 @@ export default class Milestone7Simulation {
       drainingStartedAtSec: null,
       completedAtSec: null,
       phase: 'ACTIVE',
+      selectionReason,
+      purgeDemandExecution: selectionReason === 'POSITIVE_PURGE_DEMAND' ? {
+        requestedCount: Math.max(0, this.lanePurgeDemand(source, current)), satisfiedCount: 0,
+        requestedAtSec: this.timeSec, completedAtSec: null, outcome: null,
+      } : null,
     }
   }
 
   private releaseActiveSourceTray() {
-    if (this.activePurgeBatch) return
+    if (this.purgeDiversionActive()) return
     const grant = this.activeSourceGrant
     if (!grant || grant.phase !== 'ACTIVE' || grant.pausedAtSec !== null || this.timeSec + EPS >= grant.expiresAtSec) return
     const pileId = `${grant.source}1`
@@ -893,10 +933,21 @@ export default class Milestone7Simulation {
     const tray = this.trays.find((candidate) => candidate.pilePlacement?.pileId === pileId && candidate.pilePlacement.component === 'MDR_DOWNSTREAM' && candidate.pilePlacement.zoneIndex === finalZone)
     if (!tray) return
     const destination: ZonedId = grant.source === 'C' ? 'T' : 'PRE_T'
+    if (this.zonedOccupancy('T').every(Boolean)) return
+    const execution = grant.purgeDemandExecution
+    const ownsUnsatisfiedPurgeDemand = Boolean(execution && execution.satisfiedCount < execution.requestedCount)
+    if (!this.isDEntranceAvailable() && !ownsUnsatisfiedPurgeDemand) return
     if (this.zonedOccupancy(destination)[0]) return
     tray.sourceGrantId = grant.grantId
     this.moveToZonedEntrance(tray, destination)
     grant.releasedCount += 1
+    if (execution && execution.satisfiedCount < execution.requestedCount) {
+      execution.satisfiedCount += 1
+      if (execution.satisfiedCount === execution.requestedCount) {
+        execution.completedAtSec = this.timeSec
+        execution.outcome = 'SATISFIED'
+      }
+    }
     this.cumulativeTransfers[grant.source] += 1
     if (destination === 'T') this.recordEnteredT(tray)
   }
@@ -913,13 +964,18 @@ export default class Milestone7Simulation {
     return !this.trays.some((tray) => tray.pilePlacement?.pileId === `${source}1`)
   }
 
-  private beginSourceGrantDraining() {
+  private beginSourceGrantDraining(reason: 'EXPIRED' | 'SOURCE_EMPTY') {
     const grant = this.activeSourceGrant
     if (!grant || grant.phase === 'DRAINING') return
     grant.phase = 'DRAINING'
     grant.pausedAtSec = null
     grant.remainingSecWhenPaused = null
     grant.drainingStartedAtSec = this.timeSec
+    const execution = grant.purgeDemandExecution
+    if (execution && execution.satisfiedCount < execution.requestedCount && execution.outcome === null) {
+      execution.completedAtSec = this.timeSec
+      execution.outcome = reason === 'EXPIRED' ? 'EXPIRED_WITH_REMAINDER' : 'SOURCE_EMPTY_WITH_REMAINDER'
+    }
     this.completeSourceGrantIfDrained()
   }
 
@@ -927,7 +983,7 @@ export default class Milestone7Simulation {
     const grant = this.activeSourceGrant
     if (!grant || grant.phase !== 'DRAINING' || grant.enteredTCount !== grant.releasedCount) return
     grant.completedAtSec = this.timeSec
-    this.lastCompletedSourceGrant = { ...grant }
+    this.lastCompletedSourceGrant = { ...grant, purgeDemandExecution: grant.purgeDemandExecution ? { ...grant.purgeDemandExecution } : null }
     this.sourceGrantCursor = grant.source === 'A' ? 'B' : grant.source === 'B' ? 'C' : 'A'
     this.activeSourceGrant = null
   }
@@ -940,16 +996,20 @@ export default class Milestone7Simulation {
       return
     }
     if (grant.pausedAtSec !== null) {
-      if (this.activePurgeBatch) return
+      if (this.purgeDiversionActive()) return
       grant.expiresAtSec = this.timeSec + (grant.remainingSecWhenPaused ?? 0)
       grant.pausedAtSec = null
       grant.remainingSecWhenPaused = null
     }
-    if (this.timeSec + EPS >= grant.expiresAtSec || this.sourceIsTrulyEmpty(grant.source)) {
-      this.beginSourceGrantDraining()
+    if (this.timeSec + EPS >= grant.expiresAtSec) {
+      this.beginSourceGrantDraining('EXPIRED')
       return
     }
-    if (this.activePurgeBatch) {
+    if (this.sourceIsTrulyEmpty(grant.source)) {
+      this.beginSourceGrantDraining('SOURCE_EMPTY')
+      return
+    }
+    if (this.purgeDiversionActive()) {
       grant.remainingSecWhenPaused = Math.max(0, grant.expiresAtSec - this.timeSec)
       grant.pausedAtSec = this.timeSec
     }
@@ -1604,6 +1664,9 @@ export default class Milestone7Simulation {
     const completedCountByClassification = { OUTBOUND_ONLY: 0, INBOUND_ONLY: 0, DUAL_CYCLE: 0, CANCELLED_INBOUND_ONLY: 0 }
     for (const cycle of completedCycles) completedCountByClassification[cycle.cycleType] += 1
     const outboundCompletedCount = completedCountByClassification.OUTBOUND_ONLY + completedCountByClassification.DUAL_CYCLE
+    const observedSourceGrant = this.activeSourceGrant ?? this.lastCompletedSourceGrant
+    const observedExecution = observedSourceGrant?.purgeDemandExecution ?? null
+    const observedPurgeBatch = this.activePurgeBatch ?? this.lastCompletedPurgeBatch
     return {
       timeSec: this.timeSec,
       trays: this.trays.map((tray) => ({ ...tray, pilePlacement: tray.pilePlacement ? { ...tray.pilePlacement } : undefined, zonePlacement: tray.zonePlacement ? { ...tray.zonePlacement } : undefined, inboundPlacement: tray.inboundPlacement ? { ...tray.inboundPlacement } : undefined, pileRuntime: tray.pileRuntime ? { ...tray.pileRuntime } : undefined })),
@@ -1645,19 +1708,39 @@ export default class Milestone7Simulation {
           enteredTCount: this.activeSourceGrant?.enteredTCount ?? 0,
           drainingElapsedSec: this.activeSourceGrant?.phase === 'DRAINING' && this.activeSourceGrant.drainingStartedAtSec !== null ? this.timeSec - this.activeSourceGrant.drainingStartedAtSec : 0,
           handoffWaitReason: this.activeSourceGrant?.phase === 'DRAINING' && this.activeSourceGrant.releasedCount > this.activeSourceGrant.enteredTCount ? 'PRE_T_DRAINING' : 'NONE',
+          selectionReason: observedSourceGrant?.selectionReason ?? null,
+          purgeDemandRequestedCount: observedExecution?.requestedCount ?? 0,
+          purgeDemandSatisfiedCount: observedExecution?.satisfiedCount ?? 0,
+          purgeDemandRemainingCount: observedExecution ? observedExecution.requestedCount - observedExecution.satisfiedCount : 0,
+          purgeDemandRequestedAtSec: observedExecution?.requestedAtSec ?? null,
+          purgeDemandCompletedAtSec: observedExecution?.completedAtSec ?? null,
+          purgeDemandOutcome: observedExecution?.outcome ?? (observedSourceGrant ? 'NOT_APPLICABLE' : null),
+          purgeDemandRecordKind: observedExecution ? (this.activeSourceGrant ? 'ACTIVE' : 'HISTORY') : 'NONE',
         },
         tPurgeSettings: { ...this.activeTPurgeSettings }, current: { ...srsCurrent }, globalTarget: this.globalTarget(), globalCurrent: srsGlobalCurrent,
         globalPending: srsGlobalPending, globalAvailableCapacity: srsGlobalAvailable, planningCadenceSec: this.planningCadenceSec,
         nextPlanningTime: this.nextPlanningTime, planningCursor: this.asrsNextAssign, lanes: srsLanes,
         tBypassBatch: {
           active: Boolean(this.activePurgeBatch), consecutiveDownstreamBackupDepth: this.consecutiveDownstreamTBackupDepth(),
+          recordKind: this.activePurgeBatch ? 'ACTIVE' : this.lastCompletedPurgeBatch ? 'HISTORY' : 'NONE',
           dEntranceBlocked: Boolean(this.zonedOccupancy('D')[0]),
           triggerQualifies: Boolean(this.zonedOccupancy('D')[0]) && this.consecutiveDownstreamTBackupDepth() >= this.activeTPurgeSettings.backupTrigger && !this.activePurgeBatch,
-          authorizedTrayIds: [...(this.activePurgeBatch?.authorizedTrayIds ?? [])],
-          enteredCount: this.activePurgeBatch?.enteredPurgeCount ?? 0,
-          remainingCount: this.activePurgeBatch ? this.activePurgeBatch.authorizedCount - this.activePurgeBatch.enteredPurgeCount : 0,
+          authorizedTrayIds: [...(observedPurgeBatch?.authorizedTrayIds ?? [])],
+          enteredCount: observedPurgeBatch?.enteredPurgeCount ?? 0,
+          remainingCount: observedPurgeBatch ? observedPurgeBatch.authorizedCount - observedPurgeBatch.enteredPurgeCount : 0,
           sourceGrantPaused: Boolean(this.activeSourceGrant && this.activeSourceGrant.pausedAtSec !== null && this.activePurgeBatch),
           pausedSource: this.activeSourceGrant && this.activePurgeBatch ? this.activeSourceGrant.source : null,
+          configuredQuantity: this.activeTPurgeSettings.purgeQuantity,
+          authorizedCount: observedPurgeBatch?.authorizedCount ?? 0,
+          phase: observedPurgeBatch?.phase ?? null,
+          batchId: observedPurgeBatch?.batchId ?? null,
+          enteredXCount: observedPurgeBatch?.enteredXCount ?? 0,
+          exitedXCount: observedPurgeBatch?.exitedXCount ?? 0,
+          downstreamRemainingCount: observedPurgeBatch ? observedPurgeBatch.authorizedCount - (observedPurgeBatch.exitedXCount ?? 0) : 0,
+          purgeStarvedBehindE: this.activePurgeBatch?.purgeStarvedBehindE ?? false,
+          purgeEPriorityDeferralCount: observedPurgeBatch?.purgeEPriorityDeferralCount ?? 0,
+          authorizedAtSec: observedPurgeBatch?.authorizedAtSec ?? null,
+          completedAtSec: observedPurgeBatch?.completedAtSec ?? null,
         },
       },
       returnSystem: {
@@ -1681,7 +1764,9 @@ export default class Milestone7Simulation {
       },
       segmentStats, movingCount: this.trays.filter((tray) => tray.status === 'MOVING').length, blockedCount: this.trays.filter((tray) => tray.status === 'BLOCKED').length,
       totalTraysCreated: this.totalTraysCreated, createdTrayCount: this.totalTraysCreated, physicalTrayCount: physical, consumedTrayCount: this.returnEnabled ? 0 : this.consumedCount, materialBalanceError: this.totalTraysCreated - physical - materialSinkCount,
-      sourceGrantCursor: this.sourceGrantCursor, activeSourceGrant: this.activeSourceGrant ? { ...this.activeSourceGrant } : null, lastCompletedSourceGrant: this.lastCompletedSourceGrant ? { ...this.lastCompletedSourceGrant } : null,
+      sourceGrantCursor: this.sourceGrantCursor,
+      activeSourceGrant: this.activeSourceGrant ? { ...this.activeSourceGrant, purgeDemandExecution: this.activeSourceGrant.purgeDemandExecution ? { ...this.activeSourceGrant.purgeDemandExecution } : null } : null,
+      lastCompletedSourceGrant: this.lastCompletedSourceGrant ? { ...this.lastCompletedSourceGrant, purgeDemandExecution: this.lastCompletedSourceGrant.purgeDemandExecution ? { ...this.lastCompletedSourceGrant.purgeDemandExecution } : null } : null,
       dEntranceAvailable: this.isDEntranceAvailable(), dFinalZoneOccupied: dFinal, korberNextConsumptionTime: this.nextConsumptionTime, korberLastConsumedTrayId: this.lastConsumedTrayId,
       zonedOccupancy: { PRE_T: this.zonedOccupancy('PRE_T').filter(Boolean).length, T: this.zonedOccupancy('T').filter(Boolean).length, D: this.zonedOccupancy('D').filter(Boolean).length },
       totalRouteDistance: this.segments.reduce((sum, segment) => sum + segment.lengthFt, 0),

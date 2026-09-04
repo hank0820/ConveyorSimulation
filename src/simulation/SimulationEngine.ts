@@ -1130,7 +1130,7 @@ export class SimulationEngine {
       srsControl: {
         targets: { A1: 24, B1: 16, C1: 16, T: 6, D: 73, A2: 36, B2: 29, C2: 29 },
         sourceReleaseWindowSec: 10,
-        sourceGrant: { configuredWindowSec: 10, activeLane: null, phase: 'IDLE', pausedForBypass: false, remainingWindowSec: 0, releasedCount: 0, enteredTCount: 0, drainingElapsedSec: 0, handoffWaitReason: 'NONE' },
+        sourceGrant: { configuredWindowSec: 10, activeLane: null, phase: 'IDLE', pausedForBypass: false, remainingWindowSec: 0, releasedCount: 0, enteredTCount: 0, drainingElapsedSec: 0, handoffWaitReason: 'NONE', selectionReason: null, purgeDemandRequestedCount: 0, purgeDemandSatisfiedCount: 0, purgeDemandRemainingCount: 0, purgeDemandRequestedAtSec: null, purgeDemandCompletedAtSec: null, purgeDemandOutcome: null, purgeDemandRecordKind: 'NONE' },
         tPurgeSettings: { backupTrigger: 6, purgeQuantity: 6 },
         current: { A1: occA, B1: occB, C1: occC, T: occT, D: occD, A2: 0, B2: 0, C2: 0 },
         globalTarget: 229, globalCurrent: occA + occB + occC + occT + occD,
@@ -1138,7 +1138,7 @@ export class SimulationEngine {
         globalAvailableCapacity: Math.max(0, 229 - occA - occB - occC - occT - occD - pendingBy.A - pendingBy.B - pendingBy.C),
         planningCadenceSec: 10, nextPlanningTime: 0, planningCursor: this.asrsNextAssign,
         lanes: Object.fromEntries((['A', 'B', 'C'] as SourceId[]).map((source) => [source, { source, targetSize: source === 'A' ? 24 : 16, currentCount: source === 'A' ? occA : source === 'B' ? occB : occC, pendingDemand: pendingBy[source], lanePurgeDemand: 0, localAvailable: 0, downstreamAvailable: 0, laneMissionCapacity: 0, pendingEmptyMissions: pendingBy[source], pendingCartbuildMissions: 0, maturedEmptyMissions: 0, maturedCartbuildMissions: 0, lastActualExchangerReleaseTime: null, nextEligibleExchangerReleaseTime: 0, ownsSourceGrant: false }])) as SimulationStateWithProgress['srsControl']['lanes'],
-        tBypassBatch: { active: false, consecutiveDownstreamBackupDepth: 0, dEntranceBlocked: false, triggerQualifies: false, authorizedTrayIds: [], enteredCount: 0, remainingCount: 0, sourceGrantPaused: false, pausedSource: null },
+        tBypassBatch: { active: false, recordKind: 'NONE', consecutiveDownstreamBackupDepth: 0, dEntranceBlocked: false, triggerQualifies: false, authorizedTrayIds: [], enteredCount: 0, remainingCount: 0, sourceGrantPaused: false, pausedSource: null, configuredQuantity: 6, authorizedCount: 0, phase: null, batchId: null, enteredXCount: 0, exitedXCount: 0, downstreamRemainingCount: 0, purgeStarvedBehindE: false, purgeEPriorityDeferralCount: 0, authorizedAtSec: null, completedAtSec: null },
       },
       returnSystem: {
         enabled: false,

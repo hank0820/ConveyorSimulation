@@ -19,6 +19,7 @@ export interface Tray {
   cartbuildCartonAttached?: boolean
   returnDestination?: ReturnDestination
   purgeMember?: boolean
+  tPurgeBatchId?: number
   korberHeld?: boolean
   sourceGrantId?: number
   // optional physical placement inside a logical hybrid pile
@@ -124,6 +125,16 @@ export interface CartbuildSystemState {
 }
 
 export type SourceGrantPhase = 'ACTIVE' | 'DRAINING'
+export type SourceGrantSelectionReason = 'POSITIVE_PURGE_DEMAND' | 'FULL' | 'NORMAL'
+export type PurgeDemandExecutionOutcome = 'NOT_APPLICABLE' | 'SATISFIED' | 'EXPIRED_WITH_REMAINDER' | 'SOURCE_EMPTY_WITH_REMAINDER'
+
+export interface PurgeDemandExecutionState {
+  requestedCount: number
+  satisfiedCount: number
+  requestedAtSec: number
+  completedAtSec: number | null
+  outcome: Exclude<PurgeDemandExecutionOutcome, 'NOT_APPLICABLE'> | null
+}
 
 export interface SourceReleaseGrantState {
   grantId: number
@@ -137,6 +148,8 @@ export interface SourceReleaseGrantState {
   drainingStartedAtSec: number | null
   completedAtSec: number | null
   phase: SourceGrantPhase
+  selectionReason: SourceGrantSelectionReason
+  purgeDemandExecution: PurgeDemandExecutionState | null
 }
 
 export interface ConveyorSegmentConfig {
@@ -361,6 +374,14 @@ export interface SourceGrantDiagnostic {
   enteredTCount: number
   drainingElapsedSec: number
   handoffWaitReason: 'NONE' | 'PRE_T_DRAINING'
+  selectionReason: SourceGrantSelectionReason | null
+  purgeDemandRequestedCount: number
+  purgeDemandSatisfiedCount: number
+  purgeDemandRemainingCount: number
+  purgeDemandRequestedAtSec: number | null
+  purgeDemandCompletedAtSec: number | null
+  purgeDemandOutcome: PurgeDemandExecutionOutcome | null
+  purgeDemandRecordKind: 'ACTIVE' | 'HISTORY' | 'NONE'
 }
 
 export interface SrsControlState {
@@ -379,6 +400,7 @@ export interface SrsControlState {
   lanes: Record<SourceId, SrsLaneDiagnostic>
   tBypassBatch: {
     active: boolean
+    recordKind: 'ACTIVE' | 'HISTORY' | 'NONE'
     consecutiveDownstreamBackupDepth: number
     dEntranceBlocked: boolean
     triggerQualifies: boolean
@@ -387,6 +409,17 @@ export interface SrsControlState {
     remainingCount: number
     sourceGrantPaused: boolean
     pausedSource: SourceId | null
+    configuredQuantity: number
+    authorizedCount: number
+    phase: PurgeBatchPhase | null
+    batchId: number | null
+    enteredXCount: number
+    exitedXCount: number
+    downstreamRemainingCount: number
+    purgeStarvedBehindE: boolean
+    purgeEPriorityDeferralCount: number
+    authorizedAtSec: number | null
+    completedAtSec: number | null
   }
 }
 
@@ -419,6 +452,7 @@ export interface BeltDiagnostic {
 }
 
 export interface PurgeBatchState {
+  batchId: number
   authorizedTrayIds: number[]
   authorizedCount: number
   divertedCount: number
@@ -426,7 +460,15 @@ export interface PurgeBatchState {
   authorizedAtSec: number
   completedAtSec: number | null
   status: 'ACTIVE' | 'COMPLETE'
+  phase: PurgeBatchPhase
+  diversionCompletedAtSec: number | null
+  enteredXCount: number
+  exitedXCount: number
+  purgeStarvedBehindE: boolean
+  purgeEPriorityDeferralCount: number
 }
+
+export type PurgeBatchPhase = 'AUTHORIZED' | 'DIVERTING_TO_PURGE' | 'RETURNING_THROUGH_X' | 'COMPLETE'
 
 export interface ReturnedTrayRecord {
   trayId: number
