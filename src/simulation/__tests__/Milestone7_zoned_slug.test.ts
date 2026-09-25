@@ -137,7 +137,7 @@ describe('Milestone 14B grant arbitration compatibility', () => {
   }, 30_000)
 
   test('grant state type carries explicit lifecycle timing', () => {
-    const grant: SourceReleaseGrantState = { grantId: 1, source: 'A', releasedCount: 0, enteredTCount: 0, startedAtSec: 0, expiresAtSec: 10, pausedAtSec: null, remainingSecWhenPaused: null, drainingStartedAtSec: null, completedAtSec: null, phase: 'ACTIVE', selectionReason: 'NORMAL', purgeDemandExecution: null }
+    const grant: SourceReleaseGrantState = { grantId: 1, source: 'A', releasedCount: 0, enteredTCount: 0, startedAtSec: 0, expiresAtSec: 10, drainingStartedAtSec: null, completedAtSec: null, phase: 'ACTIVE', selectionReason: 'NORMAL', purgeDemandExecution: null }
     expect(grant.phase).toBe('ACTIVE')
   })
 })

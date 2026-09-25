@@ -143,8 +143,6 @@ export interface SourceReleaseGrantState {
   enteredTCount: number
   startedAtSec: number
   expiresAtSec: number
-  pausedAtSec: number | null
-  remainingSecWhenPaused: number | null
   drainingStartedAtSec: number | null
   completedAtSec: number | null
   phase: SourceGrantPhase
@@ -368,7 +366,7 @@ export interface SourceGrantDiagnostic {
   configuredWindowSec: number
   activeLane: SourceId | null
   phase: 'IDLE' | SourceGrantPhase
-  pausedForBypass: boolean
+  physicallyBlocked: boolean
   remainingWindowSec: number
   releasedCount: number
   enteredTCount: number
@@ -407,8 +405,6 @@ export interface SrsControlState {
     authorizedTrayIds: number[]
     enteredCount: number
     remainingCount: number
-    sourceGrantPaused: boolean
-    pausedSource: SourceId | null
     configuredQuantity: number
     authorizedCount: number
     phase: PurgeBatchPhase | null
@@ -420,6 +416,8 @@ export interface SrsControlState {
     purgeEPriorityDeferralCount: number
     authorizedAtSec: number | null
     completedAtSec: number | null
+    inFlightBatchIds: number[]
+    completedBatchCount: number
   }
 }
 
@@ -487,6 +485,8 @@ export interface ReturnSystemState {
   returnedHistory: ReturnedTrayRecord[]
   purgeTriggerReady: boolean
   activePurgeBatch: PurgeBatchState | null
+  inFlightPurgeBatches: PurgeBatchState[]
+  completedPurgeBatches: PurgeBatchState[]
   lastCompletedPurgeBatch: PurgeBatchState | null
   sorterCursor: ReturnDestination
   sorterSelectedDestination: ReturnDestination | null

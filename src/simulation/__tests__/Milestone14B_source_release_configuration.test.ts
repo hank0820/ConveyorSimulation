@@ -56,7 +56,7 @@ describe('Milestone 14B source release window configuration', () => {
       counter: resetCounter,
       trayGrantIds: reset.trays.map((tray) => tray.sourceGrantId),
     })
-    expect(started.srsControl.sourceGrant).toEqual({ configuredWindowSec: 10, activeLane: null, phase: 'IDLE', pausedForBypass: false, remainingWindowSec: 0, releasedCount: 0, enteredTCount: 0, drainingElapsedSec: 0, handoffWaitReason: 'NONE', selectionReason: null, purgeDemandRequestedCount: 0, purgeDemandSatisfiedCount: 0, purgeDemandRemainingCount: 0, purgeDemandRequestedAtSec: null, purgeDemandCompletedAtSec: null, purgeDemandOutcome: null, purgeDemandRecordKind: 'NONE' })
+    expect(started.srsControl.sourceGrant).toEqual({ configuredWindowSec: 10, activeLane: null, phase: 'IDLE', physicallyBlocked: false, remainingWindowSec: 0, releasedCount: 0, enteredTCount: 0, drainingElapsedSec: 0, handoffWaitReason: 'NONE', selectionReason: null, purgeDemandRequestedCount: 0, purgeDemandSatisfiedCount: 0, purgeDemandRemainingCount: 0, purgeDemandRequestedAtSec: null, purgeDemandCompletedAtSec: null, purgeDemandOutcome: null, purgeDemandRecordKind: 'NONE' })
     expect(startedCounter).toBe(0)
   })
 

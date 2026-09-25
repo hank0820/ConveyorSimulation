@@ -140,7 +140,7 @@ Milestone 14C executes positive lane `PurgeDemand` as a discrete frozen request.
 
 The Release Control group exposes one shared **Source release window**. It defaults to 10 simulated seconds and accepts finite decimal values from 0.1 through 600 seconds. Start Scenario applies a valid selected value atomically; Reset restores ten seconds.
 
-Lane selection remains highest positive `PurgeDemand`, then a physically full source, then round-robin tie resolution. The selected lane owns an active permission window and is not preempted by later priority changes. Ordinary physical blockage consumes window time; an active T bypass pauses an unexpired window and preserves its exact remaining duration. New arrivals may join while the grant is active if they physically reach the source discharge.
+Lane selection remains highest positive `PurgeDemand`, then a physically full source, then round-robin tie resolution. The selected lane owns an active permission window and is not preempted by later priority changes. All physical blockage consumes window time, including blockage while a T-purge batch is active; the original grant deadline never moves. New arrivals may join while the grant is active if they physically reach the source discharge.
 
 Expiry stops new departures but does not revoke downstream transit. A/B trays already released into `PRE_T` drain into T before ownership transfers; C departures enter T directly. Consequently, total ownership may extend beyond the configured release-window duration. Physical vacancy, T/D controls, 1.25-second MDR movement, belt motion, identity, ordering, and accounting remain authoritative throughout.
 
@@ -148,7 +148,7 @@ Expiry stops new departures but does not revoke downstream transit. A/B trays al
 
 The T backup trigger defaults to 6 zones, and the T purge quantity defaults to 6 trays. Both accept positive integers from 1 through 12. The purge-quantity maximum is derived from the smaller physical capacity of T and PURGE.
 
-Backup depth is consecutive physical occupancy measured upstream from D, beginning at T's D-facing end. It is not arbitrary or total T occupancy. A new T purge batch requires D entrance to be blocked, the active configured consecutive downstream backup depth to be reached, and no existing T purge batch to be active.
+The trigger is **D entrance blocked and T downstream backup threshold reached**. Backup depth is consecutive physical occupancy measured upstream from D, beginning at T's D-facing end. Authorization requires return processing enabled, no batch currently owning T diversion, D entrance zone 0 occupied, the configured consecutive downstream T backup depth reached, and the full configured purge quantity physically available in T. No debounce is required. Other D zones may be vacant; the default threshold of six requires only T zones 6–11, not all twelve zones. Earlier batches may still be returning through PURGE or X.
 
 ```text
 T purge authorization requires:
@@ -161,11 +161,11 @@ Examples:
 - Trigger 6, quantity 10, and eight trays available does not authorize.
 - Trigger 6, quantity 10, and twelve trays available freezes exactly 10.
 
-Authorization freezes the exact configured quantity and downstream-priority tray identities. Payload state does not exclude a physical tray. Later arrivals cannot join; D reopening or backup depth falling below the trigger does not cancel the batch; and physical PURGE blocking delays transfers without cancelling or resizing it. While frozen members divert from T, an unexpired active source grant is paused with its exact remaining duration. Previously released source trays may continue draining, and the same grant resumes as soon as every member has entered PURGE.
+Authorization freezes the exact configured quantity and downstream-priority tray identities. Payload state does not exclude a physical tray. Later arrivals cannot join or receive credit; D reopening or backup depth falling below the trigger does not cancel the batch; and physical PURGE blocking delays transfers without cancelling or resizing it. Source selection, departures, and PRE_T admission continue concurrently whenever the existing D-availability, demand, T-capacity, and entrance-occupancy interlocks allow. Only frozen member IDs divert to PURGE; nonmembers retain ordinary routing and wait safely behind any routing conflict.
 
 Each T-purge batch has a deterministic ID retained by every frozen member through PURGE and X. The existing strict per-transfer E-over-PURGE priority remains authoritative; there is no persistent X owner or fairness alternation, so E trays may interleave between purge members. Diagnostics expose the batch phase, frozen IDs, counts entering and exiting X, immediate starvation behind an eligible E transfer, and an integer E-priority deferral count. The count increments once when a ready PURGE member loses an open-X admission to an eligible E tray; it is an event count, not elapsed wait time. Ordinary blockage by an occupied X entrance is not starvation. Batch history becomes complete only after every frozen member has successfully exited X toward the return sorter destination.
 
-T-purge batches are serialized through X: only one batch may exist at a time, and a later batch cannot authorize until every member of the prior batch has exited X and its active ownership clears. Source ACTIVE time resumes earlier, as soon as every frozen member has entered PURGE, while downstream observation continues. The lifecycle is `AUTHORIZED → DIVERTING_TO_PURGE → RETURNING_THROUGH_X → COMPLETE`.
+T-purge diversion is serialized only at T: one frozen batch owns T-to-PURGE diversion until all of its members have entered PURGE. A later qualifying batch may then authorize immediately even while earlier batches remain in PURGE or X. Each in-flight batch retains independent frozen IDs, entry/exit counters, E-priority deferrals, completion history, and ownership cleanup. Strict E priority applies only at the E/PURGE merge into X and never delays an available T-to-PURGE transfer. Source control is independent of every batch lifecycle. Each batch follows `AUTHORIZED → DIVERTING_TO_PURGE → RETURNING_THROUGH_X → COMPLETE`.
 
 ## Milestone 12 operations sidebar
 

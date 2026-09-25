@@ -35,14 +35,15 @@ describe('Milestone 12A Release Control UI', () => {
 
   test.each([
     ['ACTIVE', false, 'ACTIVE'],
-    ['ACTIVE', true, 'ACTIVE · BYPASS PAUSED'],
+    ['ACTIVE', true, 'ACTIVE · PHYSICALLY BLOCKED'],
     ['DRAINING', false, 'DRAINING'],
-  ] as const)('renders authoritative %s paused=%s diagnostics', (phase, pausedForBypass, label) => {
+  ] as const)('renders authoritative %s blocked=%s diagnostics', (phase, physicallyBlocked, label) => {
     const state = new SimulationEngine(SEGMENTS).getState()
-    state.srsControl.sourceGrant = { configuredWindowSec: 10, activeLane: 'A', phase, pausedForBypass, remainingWindowSec: phase === 'ACTIVE' ? 4.5 : 0, releasedCount: 3, enteredTCount: 2, drainingElapsedSec: phase === 'DRAINING' ? 1.5 : 0, handoffWaitReason: phase === 'DRAINING' ? 'PRE_T_DRAINING' : 'NONE', selectionReason: 'NORMAL', purgeDemandRequestedCount: 0, purgeDemandSatisfiedCount: 0, purgeDemandRemainingCount: 0, purgeDemandRequestedAtSec: null, purgeDemandCompletedAtSec: null, purgeDemandOutcome: 'NOT_APPLICABLE', purgeDemandRecordKind: 'NONE' }
+    state.srsControl.sourceGrant = { configuredWindowSec: 10, activeLane: 'A', phase, physicallyBlocked, remainingWindowSec: phase === 'ACTIVE' ? 4.5 : 0, releasedCount: 3, enteredTCount: 2, drainingElapsedSec: phase === 'DRAINING' ? 1.5 : 0, handoffWaitReason: phase === 'DRAINING' ? 'PRE_T_DRAINING' : 'NONE', selectionReason: 'NORMAL', purgeDemandRequestedCount: 0, purgeDemandSatisfiedCount: 0, purgeDemandRemainingCount: 0, purgeDemandRequestedAtSec: null, purgeDemandCompletedAtSec: null, purgeDemandOutcome: 'NOT_APPLICABLE', purgeDemandRecordKind: 'NONE' }
     const markup = render({ state, defaultOpenSections: ['srs-control'] })
     expect(markup).toContain(`data-source-grant-phase="${phase}"`)
     expect(markup).toContain(label)
+    expect(markup).toContain('Authoritative time remaining')
     expect(markup).toContain('Released / entered T')
   })
 
