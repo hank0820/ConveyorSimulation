@@ -4,8 +4,8 @@ import type { PurgeBatchState, SourceReleaseGrantState, TPurgeSettings, Tray } f
 
 const SEGMENTS = [['A1',103.5,45],['B1',86,38],['C1',86,38],['PRE_T',15,6],['T',30,12],['D',230,92],['PURGE',30,12],['E',70,28],['X',10,4],['S',20,8],['A2',136,58],['B2',118.5,51],['C2',118.5,51],['CARTBUILD_A',75,30],['CARTBUILD_B',75,30],['CARTBUILD_C',75,30]].map(([id,lengthFt,maxOccupancy]) => ({ id: String(id), lengthFt: Number(lengthFt), speedFtPerMin: 120, maxOccupancy: Number(maxOccupancy) }))
 const SETTINGS = { korberEnabled: true, cartbuildAEnabled: true, cartbuildBEnabled: true, cartbuildCEnabled: true }
-const zoned = (id: number, conveyorId: 'T' | 'D' | 'PURGE', zoneIndex: number, loadState: 'EMPTY' | 'FULL' = 'EMPTY'): Tray => ({ id, currentSegmentId: conveyorId, positionFt: (zoneIndex + 0.5) * 2.5, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', loadState, zonePlacement: { conveyorId, zoneIndex } })
-type Runtime = { timeSec: number; trays: Tray[]; activePurgeBatch: PurgeBatchState | null; lastCompletedPurgeBatch: PurgeBatchState | null; activeSourceGrant: SourceReleaseGrantState | null; activeTPurgeSettings: TPurgeSettings; authorizePurgeIfNeeded: () => void; synchronizeSourceGrant: () => void; processZonedBoundaries: () => void; processZonedConveyors: (delta: number) => void }
+const zoned = (id: number, conveyorId: 'PRE_T' | 'T' | 'D' | 'PURGE' | 'E', zoneIndex: number, loadState: 'EMPTY' | 'FULL' = 'EMPTY'): Tray => ({ id, currentSegmentId: conveyorId, positionFt: (zoneIndex + 0.5) * 2.5, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', loadState, zonePlacement: { conveyorId, zoneIndex } })
+type Runtime = { timeSec: number; trays: Tray[]; activePurgeBatch: PurgeBatchState | null; inFlightPurgeBatches: PurgeBatchState[]; lastCompletedPurgeBatch: PurgeBatchState | null; activeSourceGrant: SourceReleaseGrantState | null; activeTPurgeSettings: TPurgeSettings; authorizePurgeIfNeeded: () => void; synchronizeSourceGrant: () => void; processZonedBoundaries: () => void; processZonedConveyors: (delta: number) => void }
 const runtimeOf = (engine: SimulationEngine) => (engine as unknown as { milestone7: Runtime }).milestone7
 const start = (settings: TPurgeSettings) => { const engine = new SimulationEngine(SEGMENTS); engine.startScenario(SETTINGS, 10, undefined, undefined, settings); return engine }
 const arrange = (engine: SimulationEngine, tZones: number[], fullZone?: number) => {
@@ -91,20 +91,66 @@ describe('Milestone 12B configurable T purge', () => {
     runtime.trays.push(zoned(200, 'PURGE', 0))
     runtime.processZonedBoundaries()
     expect(runtime.activePurgeBatch).toMatchObject({ authorizedCount: 6, enteredPurgeCount: 0, divertedCount: 0 })
+    runtime.trays = runtime.trays.filter(({ id }) => id !== 200)
+    runtime.processZonedBoundaries()
+    expect(runtime.inFlightPurgeBatches[0]).toMatchObject({ batchId: 1, authorizedCount: 6, enteredPurgeCount: 1, divertedCount: 1 })
+    expect(runtime.trays.find(({ id }) => id === 12)?.zonePlacement).toEqual({ conveyorId: 'PURGE', zoneIndex: 0 })
   })
 
-  test('T purge pauses and preserves the exact active source grant and diagnostics', () => {
+  test.each(['ACTIVE', 'DRAINING'] as const)('trigger authorizes and diverts immediately while source grant is %s', (phase) => {
+    const engine = start({ backupTrigger: 1, purgeQuantity: 1 })
+    const runtime = arrange(engine, [11])
+    runtime.activeSourceGrant = { grantId: 44, source: 'A', releasedCount: phase === 'DRAINING' ? 1 : 0, enteredTCount: 0, startedAtSec: 0, expiresAtSec: 10, drainingStartedAtSec: phase === 'DRAINING' ? 0 : null, completedAtSec: null, phase, selectionReason: 'NORMAL', purgeDemandExecution: null }
+    runtime.authorizePurgeIfNeeded()
+    const batchId = runtime.activePurgeBatch?.batchId
+    runtime.processZonedBoundaries()
+    expect(batchId).toBe(1)
+    expect(runtime.timeSec).toBe(0)
+    expect(runtime.inFlightPurgeBatches[0]).toMatchObject({ batchId, authorizedAtSec: 0, enteredPurgeCount: 1, divertedCount: 1 })
+    expect(runtime.trays.find(({ id }) => id === 12)?.zonePlacement).toEqual({ conveyorId: 'PURGE', zoneIndex: 0 })
+  })
+
+  test('E readiness at X does not delay the first physically legal T-to-PURGE transfer', () => {
+    const engine = start({ backupTrigger: 1, purgeQuantity: 1 })
+    const runtime = arrange(engine, [11])
+    runtime.trays.push(zoned(300, 'E', 27, 'FULL'))
+    runtime.authorizePurgeIfNeeded()
+    runtime.processZonedBoundaries()
+    expect(runtime.trays.find(({ id }) => id === 12)?.zonePlacement).toEqual({ conveyorId: 'PURGE', zoneIndex: 0 })
+    expect(runtime.inFlightPurgeBatches[0]).toMatchObject({ enteredPurgeCount: 1, enteredXCount: 0 })
+  })
+
+  test('PRE_T admission during diversion does not contaminate frozen membership', () => {
+    const engine = start({ backupTrigger: 1, purgeQuantity: 1 })
+    const runtime = arrange(engine, [11])
+    runtime.authorizePurgeIfNeeded()
+    const frozenIds = [...runtime.activePurgeBatch!.authorizedTrayIds]
+    const newcomer = zoned(300, 'PRE_T', 5)
+    newcomer.sourceGrantId = 77
+    runtime.trays.push(newcomer)
+    runtime.activeSourceGrant = { grantId: 77, source: 'A', releasedCount: 1, enteredTCount: 0, startedAtSec: 0, expiresAtSec: 10, drainingStartedAtSec: null, completedAtSec: null, phase: 'ACTIVE', selectionReason: 'NORMAL', purgeDemandExecution: null }
+    runtime.processZonedBoundaries()
+    expect(newcomer.zonePlacement).toEqual({ conveyorId: 'T', zoneIndex: 0 })
+    expect(newcomer.purgeMember).toBeUndefined()
+    expect(newcomer.tPurgeBatchId).toBeUndefined()
+    expect(runtime.inFlightPurgeBatches[0].authorizedTrayIds).toEqual(frozenIds)
+    runtime.processZonedBoundaries()
+    expect(runtime.inFlightPurgeBatches[0]).toMatchObject({ authorizedTrayIds: frozenIds, enteredPurgeCount: 1, divertedCount: 1 })
+    expect(newcomer.zonePlacement?.conveyorId).toBe('T')
+  })
+
+  test('T purge leaves the exact active source deadline running', () => {
     const engine = start({ backupTrigger: 6, purgeQuantity: 6 })
     const runtime = arrange(engine, [6, 7, 8, 9, 10, 11])
     runtime.trays.push({ id: 300, currentSegmentId: 'B1', positionFt: 1.25, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'B', loadState: 'EMPTY', pilePlacement: { pileId: 'B1', component: 'MDR_PRE_DETRAYER', zoneIndex: 0 } })
-    runtime.activeSourceGrant = { grantId: 1, source: 'B', releasedCount: 2, enteredTCount: 2, startedAtSec: 0, expiresAtSec: 10, pausedAtSec: null, remainingSecWhenPaused: null, drainingStartedAtSec: null, completedAtSec: null, phase: 'ACTIVE', selectionReason: 'NORMAL', purgeDemandExecution: null }
+    runtime.activeSourceGrant = { grantId: 1, source: 'B', releasedCount: 2, enteredTCount: 2, startedAtSec: 0, expiresAtSec: 10, drainingStartedAtSec: null, completedAtSec: null, phase: 'ACTIVE', selectionReason: 'NORMAL', purgeDemandExecution: null }
     runtime.authorizePurgeIfNeeded()
     runtime.synchronizeSourceGrant()
-    expect(runtime.activeSourceGrant).toMatchObject({ source: 'B', pausedAtSec: 0, remainingSecWhenPaused: 10 })
-    expect(engine.getState().srsControl.tBypassBatch).toMatchObject({ sourceGrantPaused: true, pausedSource: 'B', remainingCount: 6 })
+    expect(runtime.activeSourceGrant).toMatchObject({ source: 'B', expiresAtSec: 10 })
+    expect(engine.getState().srsControl.tBypassBatch).toMatchObject({ remainingCount: 6 })
     runtime.activePurgeBatch = null
     runtime.synchronizeSourceGrant()
-    expect(runtime.activeSourceGrant).toMatchObject({ source: 'B', pausedAtSec: null, expiresAtSec: 10 })
+    expect(runtime.activeSourceGrant).toMatchObject({ source: 'B', expiresAtSec: 10 })
   })
 
   test('diagnostics expose depth, blockage, qualification, identities, and active quantities', () => {
@@ -118,7 +164,15 @@ describe('Milestone 12B configurable T purge', () => {
     expect(state.srsControl.tBypassBatch).toMatchObject({ active: true, triggerQualifies: false, remainingCount: 6, authorizedTrayIds: [12,11,10,9,8,7] })
   })
 
-  test('completion cannot duplicate-authorize until a later eligible controller cycle', () => {
+  test('repeated trigger evaluation cannot duplicate the currently diverting batch', () => {
+    const engine = start({ backupTrigger: 1, purgeQuantity: 1 })
+    const runtime = arrange(engine, [11])
+    for (let attempt = 0; attempt < 10; attempt++) runtime.authorizePurgeIfNeeded()
+    expect(runtime.activePurgeBatch).toMatchObject({ batchId: 1, authorizedTrayIds: [12] })
+    expect(runtime.inFlightPurgeBatches).toHaveLength(1)
+  })
+
+  test('diversion completion permits a distinct batch while the first remains downstream', () => {
     const engine = new SimulationEngine(SEGMENTS)
     engine.startScenario(engine.getOperatingSettings(), 10, undefined, undefined, { backupTrigger: 1, purgeQuantity: 1 })
     const runtime = runtimeOf(engine)
@@ -128,15 +182,17 @@ describe('Milestone 12B configurable T purge', () => {
     expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([2])
 
     runtime.processZonedBoundaries()
-    expect(runtime.activePurgeBatch).toMatchObject({ authorizedTrayIds: [2], phase: 'RETURNING_THROUGH_X' })
+    expect(runtime.activePurgeBatch).toBeNull()
+    expect(runtime.inFlightPurgeBatches[0]).toMatchObject({ authorizedTrayIds: [2], phase: 'RETURNING_THROUGH_X' })
     expect(runtime.lastCompletedPurgeBatch).toBeNull()
     runtime.processZonedConveyors(1.25)
-    expect(runtime.activePurgeBatch).not.toBeNull()
+    expect(runtime.inFlightPurgeBatches).toHaveLength(1)
 
     const remaining = runtime.trays.find((tray) => tray.id === 1)!
     remaining.zonePlacement = { conveyorId: 'T', zoneIndex: 11 }
     remaining.positionFt = 28.75
     runtime.authorizePurgeIfNeeded()
-    expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([2])
+    expect(runtime.activePurgeBatch?.authorizedTrayIds).toEqual([1])
+    expect(runtime.inFlightPurgeBatches.map(({ authorizedTrayIds }) => authorizedTrayIds)).toEqual([[2], [1]])
   })
 })

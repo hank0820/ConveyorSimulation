@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import SimulationEngine from '../SimulationEngine'
-import type { Mission, ReturnDestination, Tray } from '../types'
+import type { Mission, ReturnDestination, SourceReleaseGrantState, Tray } from '../types'
 
 const SEGMENTS = [
   { id: 'A1', lengthFt: 81, speedFtPerMin: 120, nextSegmentId: 'PRE_T', maxOccupancy: 24 },
@@ -26,6 +26,7 @@ type Runtime = {
   nextConsumptionTime: number
   timeSec: number
   sorterCursor: ReturnDestination
+  activeSourceGrant: SourceReleaseGrantState | null
   returnAssignments: Record<ReturnDestination, { EMPTY: number; FULL: number }>
   processReturnBoundaries: () => void
   processExchangerSinks: () => void
@@ -112,7 +113,7 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     assertPhysical(engine.getState())
   })
 
-  test('purge freezes the downstream six, excludes arrivals, and completes despite D reopening', () => {
+  test('six-member purge admits a nonmember concurrently and completes exactly once despite D reopening', () => {
     const engine = createEngine()
     const runtime = runtimeOf(engine)
     runtime.trays = Array.from({ length: 12 }, (_, zone) => zoned(zone + 1, 'T', zone))
@@ -125,28 +126,201 @@ describe('Milestone 8 return conveyor topology and lifecycle', () => {
     expect(state.returnSystem.activePurgeBatch?.authorizedTrayIds).toEqual([12, 11, 10, 9, 8, 7])
     expect(state.returnSystem.activePurgeBatch?.authorizedTrayIds.map((id) => runtime.trays.find((tray) => tray.id === id)?.purgeMember)).toEqual(Array(6).fill(true))
     expect(state.returnSystem.activePurgeBatch?.enteredPurgeCount).toBe(1)
-    runtime.trays.push(zoned(21, 'PRE_T', 0))
+    const newcomer = zoned(21, 'PRE_T', 5)
+    newcomer.sourceGrantId = 77
+    runtime.trays.push(newcomer)
     runtime.totalTraysCreated += 1
+    runtime.activeSourceGrant = { grantId: 77, source: 'A', releasedCount: 1, enteredTCount: 0, startedAtSec: 0, expiresAtSec: 10, drainingStartedAtSec: null, completedAtSec: null, phase: 'DRAINING', selectionReason: 'NORMAL', purgeDemandExecution: null }
     const dBlocker = runtime.trays.find(({ id }) => id === 20)!
     dBlocker.zonePlacement = { conveyorId: 'D', zoneIndex: 1 }
     dBlocker.pileRuntime = undefined
     const entrySequence = [12]
     const seenInPurge = new Set(entrySequence)
-    for (let tick = 0; tick < 500 && engine.getState().returnSystem.activePurgeBatch; tick++) {
+    let newcomerEnteredTDuringDiversion = false
+    const observedBatchIds = new Set<number>()
+    for (let tick = 0; tick < 500 && engine.getState().returnSystem.inFlightPurgeBatches.length; tick++) {
       engine.step(0.1)
-      for (const item of engine.getState().trays.filter((tray) => tray.zonePlacement?.conveyorId === 'PURGE')) {
+      const during = engine.getState()
+      if (during.returnSystem.activePurgeBatch) observedBatchIds.add(during.returnSystem.activePurgeBatch.batchId)
+      newcomerEnteredTDuringDiversion ||= Boolean(during.returnSystem.inFlightPurgeBatches.length && during.trays.find((tray) => tray.id === 21)?.zonePlacement?.conveyorId === 'T')
+      expect(during.trays.find((tray) => tray.id === 21)?.tPurgeBatchId).toBeUndefined()
+      expect(during.trays.find((tray) => tray.id === 21)?.purgeMember).not.toBe(true)
+      for (const item of during.trays.filter((tray) => tray.zonePlacement?.conveyorId === 'PURGE')) {
         if (!seenInPurge.has(item.id)) { seenInPurge.add(item.id); entrySequence.push(item.id) }
       }
     }
     state = engine.getState()
     expect(state.returnSystem.activePurgeBatch).toBeNull()
-    expect(state.returnSystem.lastCompletedPurgeBatch).toMatchObject({ authorizedCount: 6, divertedCount: 6, enteredPurgeCount: 6, status: 'COMPLETE' })
+    expect(state.returnSystem.lastCompletedPurgeBatch).toMatchObject({ authorizedCount: 6, divertedCount: 6, enteredPurgeCount: 6, enteredXCount: 6, exitedXCount: 6, status: 'COMPLETE' })
+    expect(state.returnSystem.lastCompletedPurgeBatch?.authorizedTrayIds).toEqual([12, 11, 10, 9, 8, 7])
     expect(state.returnSystem.lastCompletedPurgeBatch?.authorizedTrayIds).not.toContain(21)
+    expect(newcomerEnteredTDuringDiversion).toBe(true)
+    expect([...observedBatchIds]).toEqual([1])
     expect(entrySequence).toEqual([12, 11, 10, 9, 8, 7])
     expect(new Set(entrySequence).size).toBe(6)
     expect(state.trays.filter((tray) => tray.purgeMember || tray.tPurgeBatchId !== undefined)).toEqual([])
     for (const id of [12, 11, 10, 9, 8, 7]) expect(state.trays.find((tray) => tray.id === id)?.zonePlacement?.conveyorId).not.toBe('D')
     assertPhysical(state)
+  })
+
+  test('default six-tray batches overlap through public advancement with independent frozen ownership', () => {
+    const engine = createEngine()
+    // Keep D blocked by disabling Korber, and defer replenishment beyond this trace.
+    // Geometry and the default 6/6 purge settings are supplied by the real engine.
+    engine.startScenario({ ...engine.getOperatingSettings(), korberEnabled: false }, 1000)
+    const runtime = runtimeOf(engine)
+    const earlyArrival = zoned(13, 'PRE_T', 5)
+    earlyArrival.sourceGrantId = 77
+    // The second arrival must traverse A1's downstream MDR bank and PRE_T,
+    // so it reaches T after batch 2 freezes, without injecting a tray mid-run.
+    const laterArrival: Tray = {
+      id: 14, currentSegmentId: 'A1', positionFt: 67.25, status: 'BLOCKED',
+      createdAtSec: 0, originSourceId: 'A', loadState: 'EMPTY',
+      pilePlacement: { pileId: 'A1', component: 'MDR_DOWNSTREAM', zoneIndex: 0 },
+    }
+    runtime.trays = [
+      ...Array.from({ length: 12 }, (_, zone) => zoned(zone + 1, 'T', zone)),
+      ...Array.from({ length: 92 }, (_, zone) => zoned(100 + zone, 'D', zone)),
+      ...Array.from({ length: 28 }, (_, zone) => zoned(200 + zone, 'E', zone, 'FULL')),
+      earlyArrival, laterArrival,
+    ]
+    runtime.missions = []
+    runtime.totalTraysCreated = runtime.trays.length
+    runtime.activeSourceGrant = {
+      grantId: 77, source: 'A', releasedCount: 1, enteredTCount: 0,
+      startedAtSec: 0, expiresAtSec: 60, drainingStartedAtSec: null,
+      completedAtSec: null, phase: 'ACTIVE', selectionReason: 'POSITIVE_PURGE_DEMAND',
+      purgeDemandExecution: { requestedCount: 2, satisfiedCount: 1, requestedAtSec: 0, completedAtSec: null, outcome: null },
+    }
+    // Setup ends here: no repositioning, private controller calls, or state writes below.
+    let prior = engine.getState()
+    expect(prior.srsControl.tPurgeSettings).toEqual({ backupTrigger: 6, purgeQuantity: 6 })
+    assertPhysical(prior)
+    const frozen = [[12, 11, 10, 9, 8, 7], [6, 5, 4, 3, 2, 1]]
+    expect(new Set(frozen.flat()).size).toBe(12)
+    type Crossing = { id: number; batchId: number; time: number }
+    const diverted: Crossing[] = []
+    const enteredX: Crossing[] = []
+    const exitedX: Crossing[] = []
+    const allXEntries: number[] = []
+    const allXExits: number[] = []
+    const deferrals = [0, 0]
+    const authorizationTimes = new Map<number, number>()
+    const completedHistory = new Map<number, string>()
+    const arrivals = new Map<number, number>()
+    let overlapObserved = false
+    let completedTicks = 0
+    for (let tick = 0; tick < 1200; tick++) {
+      engine.step(0.1)
+      const state = engine.getState()
+      assertPhysical(state)
+      const previousById = new Map(prior.trays.map((tray) => [tray.id, tray]))
+      for (const tray of state.trays) {
+        const previous = previousById.get(tray.id)!
+        const before = routeOf(previous)
+        const after = routeOf(tray)
+        if (before === 'PRE_T' && after === 'T') {
+          arrivals.set(tray.id, state.timeSec)
+          expect(state.timeSec).toBeGreaterThan(authorizationTimes.get(1)!)
+        }
+        if (tray.id === 13 || tray.id === 14) {
+          expect(tray.tPurgeBatchId).toBeUndefined()
+          expect(tray.purgeMember).not.toBe(true)
+        }
+        if (before === 'T' && after === 'PURGE') {
+          expect(tray.tPurgeBatchId).toBe(tray.id >= 7 ? 1 : 2)
+          diverted.push({ id: tray.id, batchId: tray.tPurgeBatchId!, time: state.timeSec })
+        }
+        if (before !== 'X' && after === 'X') {
+          allXEntries.push(tray.id)
+          const waitingPurge = state.trays.find((item) => item.zonePlacement?.conveyorId === 'PURGE' && item.zonePlacement.zoneIndex === 11)
+          if (before === 'E' && waitingPurge) deferrals[waitingPurge.tPurgeBatchId! - 1] += 1
+          if (before === 'PURGE') {
+            // E cannot remain eligible when PURGE wins the open X entrance.
+            expect(state.trays.some((item) => item.zonePlacement?.conveyorId === 'E' && item.zonePlacement.zoneIndex === 27)).toBe(false)
+            expect(tray.tPurgeBatchId).toBe(previous.tPurgeBatchId)
+            enteredX.push({ id: tray.id, batchId: tray.tPurgeBatchId!, time: state.timeSec })
+          }
+        }
+        if (before === 'X' && after !== 'X') {
+          allXExits.push(tray.id)
+          if (previous.tPurgeBatchId !== undefined) {
+            exitedX.push({ id: tray.id, batchId: previous.tPurgeBatchId, time: state.timeSec })
+            expect(tray.tPurgeBatchId).toBeUndefined()
+            expect(tray.purgeMember).toBe(false)
+          }
+        }
+      }
+      expect(allXExits).toEqual(allXEntries.slice(0, allXExits.length))
+      const batches = [...state.returnSystem.inFlightPurgeBatches, ...state.returnSystem.completedPurgeBatches]
+      expect(new Set(batches.map(({ batchId }) => batchId)).size).toBe(batches.length)
+      expect(batches.length).toBeLessThanOrEqual(2)
+      for (const batch of batches) {
+        expect([1, 2]).toContain(batch.batchId)
+        expect(batch.authorizedTrayIds).toEqual(frozen[batch.batchId - 1])
+        expect(batch.authorizedCount).toBe(6)
+        const count = (events: Crossing[]) => events.filter(({ batchId }) => batchId === batch.batchId).length
+        expect(batch.divertedCount).toBe(count(diverted))
+        expect(batch.enteredPurgeCount).toBe(count(diverted))
+        expect(batch.enteredXCount).toBe(count(enteredX))
+        expect(batch.exitedXCount).toBe(count(exitedX))
+        expect(batch.purgeEPriorityDeferralCount).toBe(deferrals[batch.batchId - 1])
+        if (!authorizationTimes.has(batch.batchId)) {
+          authorizationTimes.set(batch.batchId, batch.authorizedAtSec)
+          expect(state.trays.some((tray) => tray.zonePlacement?.conveyorId === 'D' && tray.zonePlacement.zoneIndex === 0)).toBe(true)
+          if (batch.batchId === 2) {
+            const first = state.returnSystem.inFlightPurgeBatches.find(({ batchId }) => batchId === 1)!
+            expect(first).toMatchObject({ enteredPurgeCount: 6, phase: 'RETURNING_THROUGH_X', status: 'ACTIVE', completedAtSec: null })
+            expect(first.exitedXCount).toBeLessThan(6)
+            expect(first.diversionCompletedAtSec).toBeLessThanOrEqual(batch.authorizedAtSec)
+            expect(state.returnSystem.completedPurgeBatches).toEqual([])
+            overlapObserved = true
+          }
+        }
+        expect(batch.authorizedAtSec).toBe(authorizationTimes.get(batch.batchId))
+        if (batch.enteredPurgeCount < 6) {
+          expect(batch.phase).toBe(batch.enteredPurgeCount ? 'DIVERTING_TO_PURGE' : 'AUTHORIZED')
+          expect(state.returnSystem.activePurgeBatch?.batchId).toBe(batch.batchId)
+          expect(batch.diversionCompletedAtSec).toBeNull()
+        } else {
+          expect(state.returnSystem.activePurgeBatch?.batchId).not.toBe(batch.batchId)
+          expect(batch.diversionCompletedAtSec).toBe(diverted.filter(({ batchId }) => batchId === batch.batchId).at(-1)!.time)
+          expect(batch.phase).toBe(batch.exitedXCount === 6 ? 'COMPLETE' : 'RETURNING_THROUGH_X')
+        }
+        expect(batch.status).toBe(batch.exitedXCount === 6 ? 'COMPLETE' : 'ACTIVE')
+        if (batch.status === 'COMPLETE') {
+          expect(batch.completedAtSec).toBe(exitedX.filter(({ batchId }) => batchId === batch.batchId).at(-1)!.time)
+          expect(batch.purgeStarvedBehindE).toBe(false)
+          if (!completedHistory.has(batch.batchId)) completedHistory.set(batch.batchId, JSON.stringify(batch))
+          expect(JSON.stringify(batch)).toBe(completedHistory.get(batch.batchId))
+        } else expect(batch.completedAtSec).toBeNull()
+        for (const id of batch.authorizedTrayIds) {
+          const tray = state.trays.find((item) => item.id === id)
+          const hasExited = exitedX.some((event) => event.id === id)
+          if (!hasExited) expect(tray).toMatchObject({ tPurgeBatchId: batch.batchId, purgeMember: true })
+          else if (tray) expect(tray.tPurgeBatchId).toBeUndefined()
+        }
+      }
+      prior = state
+      // Keep evaluating the unchanged trigger after completion to catch reauthorization.
+      if (state.returnSystem.completedPurgeBatches.length === 2 && ++completedTicks === 30) break
+    }
+    expect(overlapObserved).toBe(true)
+    expect(completedTicks).toBe(30)
+    expect([...arrivals.keys()].sort()).toEqual([13, 14])
+    expect(arrivals.get(14)).toBeGreaterThan(authorizationTimes.get(2)!)
+    for (const events of [diverted, enteredX, exitedX]) {
+      expect(events.map(({ id }) => id)).toEqual(frozen.flat())
+      expect(events.map(({ batchId }) => batchId)).toEqual([...Array(6).fill(1), ...Array(6).fill(2)])
+      expect(new Set(events.map(({ id }) => id)).size).toBe(12)
+    }
+    expect(deferrals[0]).toBeGreaterThan(0)
+    expect(prior.returnSystem.completedPurgeBatches.map(({ batchId }) => batchId)).toEqual([1, 2])
+    expect(prior.returnSystem.lastCompletedPurgeBatch).toEqual(prior.returnSystem.completedPurgeBatches[1])
+    expect(prior.returnSystem.inFlightPurgeBatches).toEqual([])
+    expect(prior.returnSystem.activePurgeBatch).toBeNull()
+    expect(prior.trays.filter((tray) => tray.purgeMember || tray.tPurgeBatchId !== undefined)).toEqual([])
+    expect(prior.srsControl.tBypassBatch).toMatchObject({ inFlightBatchIds: [], completedBatchCount: 2 })
   })
 
   test('E has strict eligible priority into X and PURGE proceeds when E is not ready', () => {

@@ -6,10 +6,10 @@ const SEGMENTS = [['A1',103.5,45],['B1',86,38],['C1',86,38],['PRE_T',15,6],['T',
 const zoned = (id: number, conveyorId: 'PRE_T' | 'T' | 'D' | 'PURGE' | 'E' | 'X', zoneIndex: number): Tray => ({ id, currentSegmentId: conveyorId, positionFt: (zoneIndex + 0.5) * 2.5, status: 'BLOCKED', createdAtSec: 0, originSourceId: 'A', loadState: conveyorId === 'E' ? 'FULL' : 'EMPTY', zonePlacement: { conveyorId, zoneIndex } })
 const pile = (id: number, source: SourceId, zoneIndex = source === 'A' ? 14 : 7): Tray => ({ id, currentSegmentId: `${source}1`, positionFt: (zoneIndex + 0.5) * 2.5, status: 'BLOCKED', createdAtSec: 0, originSourceId: source, loadState: 'EMPTY', pilePlacement: { pileId: `${source}1`, component: 'MDR_DOWNSTREAM', zoneIndex } })
 type Runtime = {
-  timeSec: number; trays: Tray[]; missions: Mission[]; activeTargets: Record<string, number>; sourceGrantCursor: SourceId
+  timeSec: number; trays: Tray[]; missions: Mission[]; totalTraysCreated: number; activeTargets: Record<string, number>; sourceGrantCursor: SourceId
   purgeBatchCounter: number
   activeSourceGrant: SourceReleaseGrantState | null; lastCompletedSourceGrant: SourceReleaseGrantState | null
-  activePurgeBatch: PurgeBatchState | null; lastCompletedPurgeBatch: PurgeBatchState | null
+  activePurgeBatch: PurgeBatchState | null; inFlightPurgeBatches: PurgeBatchState[]; completedPurgeBatches: PurgeBatchState[]; lastCompletedPurgeBatch: PurgeBatchState | null
   activeTPurgeSettings: { backupTrigger: number; purgeQuantity: number }
   authorizeSourceGrantIfPossible: () => void; releaseActiveSourceTray: () => void; synchronizeSourceGrant: () => void
   authorizePurgeIfNeeded: () => void; processZonedBoundaries: () => void; processReturnBoundaries: (delta?: number) => void
@@ -162,23 +162,25 @@ describe('Milestone 14C observable T-purge batches', () => {
     expect(runtime.activePurgeBatch).toMatchObject({ batchId: 1, authorizedTrayIds: [1], authorizedCount: 1, phase: 'AUTHORIZED' })
     expect(runtime.trays[0]).toMatchObject({ purgeMember: true, tPurgeBatchId: 1 })
     runtime.activePurgeBatch = null
+    runtime.inFlightPurgeBatches = []
     runtime.activeTPurgeSettings = { backupTrigger: 1, purgeQuantity: 2 }
     runtime.authorizePurgeIfNeeded()
     expect(runtime.activePurgeBatch).toBeNull()
   })
 
-  test('resumes the source after PURGE entry while tracking the batch through X', () => {
+  test('tracks the batch through X without changing the concurrent source deadline', () => {
     const { engine, runtime } = arrangeBatch()
     runtime.trays.push(pile(2, 'A'))
-    runtime.activeSourceGrant = { grantId: 7, source: 'A', releasedCount: 0, enteredTCount: 0, startedAtSec: 0, expiresAtSec: 10, pausedAtSec: 0, remainingSecWhenPaused: 10, drainingStartedAtSec: null, completedAtSec: null, phase: 'ACTIVE', selectionReason: 'NORMAL', purgeDemandExecution: null }
+    runtime.activeSourceGrant = { grantId: 7, source: 'A', releasedCount: 0, enteredTCount: 0, startedAtSec: 0, expiresAtSec: 10, drainingStartedAtSec: null, completedAtSec: null, phase: 'ACTIVE', selectionReason: 'NORMAL', purgeDemandExecution: null }
     runtime.processZonedBoundaries()
     runtime.synchronizeSourceGrant()
-    expect(runtime.activePurgeBatch?.phase).toBe('RETURNING_THROUGH_X')
-    expect(runtime.activeSourceGrant?.pausedAtSec).toBeNull()
-    expect(engine.getState().srsControl.tBypassBatch).toMatchObject({ phase: 'RETURNING_THROUGH_X', downstreamRemainingCount: 1, sourceGrantPaused: false })
+    expect(runtime.activePurgeBatch).toBeNull()
+    expect(runtime.inFlightPurgeBatches[0]?.phase).toBe('RETURNING_THROUGH_X')
+    expect(runtime.activeSourceGrant?.expiresAtSec).toBe(10)
+    expect(engine.getState().srsControl.tBypassBatch).toMatchObject({ phase: 'RETURNING_THROUGH_X', downstreamRemainingCount: 1 })
   })
 
-  test.each(['AUTHORIZED', 'DIVERTING_TO_PURGE', 'RETURNING_THROUGH_X'] as const)('serializes authorization while batch 1 is %s', (phase) => {
+  test.each(['AUTHORIZED', 'DIVERTING_TO_PURGE'] as const)('serializes authorization while batch 1 is diverting in phase %s', (phase) => {
     const { runtime } = arrangeBatch()
     runtime.activePurgeBatch!.phase = phase
     runtime.trays.unshift(zoned(2, 'T', 10))
@@ -187,7 +189,7 @@ describe('Milestone 14C observable T-purge batches', () => {
     expect(runtime.purgeBatchCounter).toBe(1)
   })
 
-  test('authorizes a distinct sequential batch only after X completion without mixing history', () => {
+  test('preserves completed history when a later distinct batch authorizes', () => {
     const { engine, runtime } = arrangeBatch()
     runtime.processZonedBoundaries()
     const first = runtime.trays.find((tray) => tray.id === 1)!
@@ -203,6 +205,45 @@ describe('Milestone 14C observable T-purge batches', () => {
     expect(engine.getState().srsControl.tBypassBatch).toMatchObject({ recordKind: 'ACTIVE', batchId: 2, authorizedTrayIds: [2], enteredCount: 0 })
     expect(completedOne).toMatchObject({ batchId: 1, authorizedTrayIds: [1], phase: 'COMPLETE', enteredPurgeCount: 1, exitedXCount: 1 })
     expect(engine.getState().returnSystem.lastCompletedPurgeBatch).toEqual(completedOne)
+  })
+
+  test('tracks two disjoint downstream batches independently after serialized diversion', () => {
+    const { engine, runtime } = setup()
+    runtime.trays = [zoned(1, 'T', 10), zoned(2, 'T', 11), zoned(90, 'D', 0)]
+    runtime.totalTraysCreated = 3
+    runtime.activeTPurgeSettings = { backupTrigger: 1, purgeQuantity: 1 }
+    runtime.authorizePurgeIfNeeded()
+    runtime.processZonedBoundaries()
+    const first = runtime.trays.find(({ id }) => id === 2)!
+    first.zonePlacement = { conveyorId: 'PURGE', zoneIndex: 11 }
+    const second = runtime.trays.find(({ id }) => id === 1)!
+    second.zonePlacement = { conveyorId: 'T', zoneIndex: 11 }
+    runtime.authorizePurgeIfNeeded()
+    runtime.processZonedBoundaries()
+
+    expect(runtime.inFlightPurgeBatches.map(({ batchId, authorizedTrayIds, enteredPurgeCount }) => ({ batchId, authorizedTrayIds, enteredPurgeCount }))).toEqual([
+      { batchId: 1, authorizedTrayIds: [2], enteredPurgeCount: 1 },
+      { batchId: 2, authorizedTrayIds: [1], enteredPurgeCount: 1 },
+    ])
+    expect(first.tPurgeBatchId).toBe(1)
+    expect(second.tPurgeBatchId).toBe(2)
+
+    runtime.processReturnBoundaries()
+    first.zonePlacement = { conveyorId: 'X', zoneIndex: 3 }; first.returnDestination = 'A2'
+    runtime.processReturnBoundaries()
+    second.zonePlacement = { conveyorId: 'PURGE', zoneIndex: 11 }
+    runtime.processReturnBoundaries()
+    second.zonePlacement = { conveyorId: 'X', zoneIndex: 3 }; second.returnDestination = 'C2'
+    runtime.processReturnBoundaries()
+
+    expect(runtime.completedPurgeBatches.map(({ batchId, authorizedTrayIds, enteredXCount, exitedXCount }) => ({ batchId, authorizedTrayIds, enteredXCount, exitedXCount }))).toEqual([
+      { batchId: 1, authorizedTrayIds: [2], enteredXCount: 1, exitedXCount: 1 },
+      { batchId: 2, authorizedTrayIds: [1], enteredXCount: 1, exitedXCount: 1 },
+    ])
+    expect(runtime.inFlightPurgeBatches).toEqual([])
+    expect(runtime.trays.filter(({ purgeMember, tPurgeBatchId }) => purgeMember || tPurgeBatchId !== undefined)).toEqual([])
+    expect(engine.getState()).toMatchObject({ materialBalanceError: 0 })
+    expect(new Set(engine.getState().trays.map(({ id }) => id)).size).toBe(engine.getState().trays.length)
   })
 
   test('E wins each eligible transfer and starvation diagnostics exclude physical X blockage', () => {
@@ -268,6 +309,7 @@ describe('Milestone 14C observable T-purge batches', () => {
     const second = zoned(2, 'PURGE', 10); second.purgeMember = true; second.tPurgeBatchId = 1
     runtime.trays = [first, second, zoned(10, 'E', 27)]
     runtime.activePurgeBatch = { batchId: 1, authorizedTrayIds: [1, 2], authorizedCount: 2, divertedCount: 2, enteredPurgeCount: 2, authorizedAtSec: 0, completedAtSec: null, status: 'ACTIVE', phase: 'RETURNING_THROUGH_X', diversionCompletedAtSec: 0, enteredXCount: 0, exitedXCount: 0, purgeStarvedBehindE: false, purgeEPriorityDeferralCount: 0 }
+    runtime.inFlightPurgeBatches = [runtime.activePurgeBatch]
     runtime.processReturnBoundaries()
     expect(runtime.trays.find((tray) => tray.id === 10)?.zonePlacement?.conveyorId).toBe('X')
     runtime.trays = runtime.trays.filter((tray) => tray.id !== 10)
@@ -282,7 +324,7 @@ describe('Milestone 14C observable T-purge batches', () => {
     runtime.trays = runtime.trays.filter((tray) => tray.id !== 11)
     runtime.processReturnBoundaries()
     expect(second.zonePlacement?.conveyorId).toBe('X')
-    expect(runtime.activePurgeBatch).toMatchObject({ enteredXCount: 2, exitedXCount: 1, purgeStarvedBehindE: false })
+    expect(runtime.inFlightPurgeBatches[0]).toMatchObject({ enteredXCount: 2, exitedXCount: 1, purgeStarvedBehindE: false })
   })
 
   test('completes only after every frozen member exits X and retains history', () => {
@@ -291,11 +333,11 @@ describe('Milestone 14C observable T-purge batches', () => {
     const member = runtime.trays.find((tray) => tray.id === 1)!
     member.zonePlacement = { conveyorId: 'PURGE', zoneIndex: 11 }
     runtime.processReturnBoundaries(0.1)
-    expect(runtime.activePurgeBatch).toMatchObject({ enteredXCount: 1, exitedXCount: 0, status: 'ACTIVE' })
+    expect(runtime.inFlightPurgeBatches[0]).toMatchObject({ enteredXCount: 1, exitedXCount: 0, status: 'ACTIVE' })
     member.zonePlacement = { conveyorId: 'X', zoneIndex: 3 }
     member.returnDestination = 'C2'
     runtime.processReturnBoundaries(0.1)
-    expect(runtime.activePurgeBatch).toBeNull()
+    expect(runtime.inFlightPurgeBatches).toEqual([])
     expect(runtime.lastCompletedPurgeBatch).toMatchObject({ batchId: 1, enteredXCount: 1, exitedXCount: 1, phase: 'COMPLETE', status: 'COMPLETE' })
     expect(engine.getState().srsControl.tBypassBatch).toMatchObject({ phase: 'COMPLETE', downstreamRemainingCount: 0 })
   })
@@ -316,7 +358,7 @@ describe('Milestone 14C observable T-purge batches', () => {
     engine.reset()
     const reset = engine.getState()
     expect(reset.returnSystem).toMatchObject({ activePurgeBatch: null, lastCompletedPurgeBatch: null })
-    expect(reset.srsControl.tBypassBatch).toMatchObject({ recordKind: 'NONE', batchId: null, authorizedTrayIds: [], enteredCount: 0, enteredXCount: 0, exitedXCount: 0, purgeEPriorityDeferralCount: 0, purgeStarvedBehindE: false, sourceGrantPaused: false })
+    expect(reset.srsControl.tBypassBatch).toMatchObject({ recordKind: 'NONE', batchId: null, authorizedTrayIds: [], enteredCount: 0, enteredXCount: 0, exitedXCount: 0, purgeEPriorityDeferralCount: 0, purgeStarvedBehindE: false })
     expect(reset.trays.some((tray) => tray.tPurgeBatchId !== undefined)).toBe(false)
     expect(runtime.purgeBatchCounter).toBe(0)
     engine.startScenario(engine.getOperatingSettings(), 10)

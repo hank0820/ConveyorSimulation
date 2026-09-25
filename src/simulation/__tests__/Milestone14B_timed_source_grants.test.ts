@@ -79,13 +79,12 @@ describe('Milestone 14B timed source grants', () => {
     expect(runtime.trays.find((tray) => tray.id === 1)?.pilePlacement?.pileId).toBe('C1')
   })
 
-  test('partial and repeated bypass pauses preserve remaining time without drift', () => {
+  test('bypass starting mid-grant leaves the original deadline authoritative', () => {
     const { runtime } = isolated(10); runtime.authorizeSourceGrantIfPossible()
     runtime.timeSec = 2; runtime.activePurgeBatch = purge(2); runtime.synchronizeSourceGrant()
-    expect(runtime.activeSourceGrant?.remainingSecWhenPaused).toBe(8)
-    runtime.timeSec = 5; runtime.activePurgeBatch = null; runtime.synchronizeSourceGrant(); expect(runtime.activeSourceGrant?.expiresAtSec).toBe(13)
-    runtime.timeSec = 7; runtime.activePurgeBatch = purge(7); runtime.synchronizeSourceGrant()
-    runtime.timeSec = 9; runtime.activePurgeBatch = null; runtime.synchronizeSourceGrant(); expect(runtime.activeSourceGrant?.expiresAtSec).toBe(15)
+    expect(runtime.activeSourceGrant?.expiresAtSec).toBe(10)
+    runtime.timeSec = 9; runtime.activePurgeBatch = null; runtime.synchronizeSourceGrant()
+    expect(runtime.activeSourceGrant).toMatchObject({ phase: 'ACTIVE', expiresAtSec: 10 })
   })
 
   test('bypass beginning at expiry cannot revive an expired grant', () => {
@@ -94,6 +93,22 @@ describe('Milestone 14B timed source grants', () => {
     runtime.synchronizeSourceGrant()
     expect(runtime.activeSourceGrant).toBeNull()
     expect(runtime.lastCompletedSourceGrant).toMatchObject({ releasedCount: 0 })
+  })
+
+  test('expiry during bypass stops departures and bypass completion cannot revive the grant', () => {
+    const { runtime } = isolated(1); runtime.authorizeSourceGrantIfPossible(); const grantId = runtime.activeSourceGrant!.grantId
+    runtime.activePurgeBatch = purge(0.25); runtime.timeSec = 1; runtime.synchronizeSourceGrant(); runtime.releaseActiveSourceTray()
+    expect(runtime.lastCompletedSourceGrant).toMatchObject({ grantId, releasedCount: 0, expiresAtSec: 1 })
+    runtime.activePurgeBatch = null; runtime.timeSec = 2; runtime.synchronizeSourceGrant(); runtime.releaseActiveSourceTray()
+    expect(runtime.trays.find((tray) => tray.id === 1)?.pilePlacement?.pileId).toBe('A1')
+  })
+
+  test.each(['A', 'B', 'C'] as const)('%s selection and a physically legal departure can occur during bypass', (source) => {
+    const { runtime } = isolated(10)
+    runtime.trays = [pile(1, source, source === 'A' ? 14 : 7)]; runtime.sourceGrantCursor = source; runtime.activePurgeBatch = purge(0)
+    runtime.authorizeSourceGrantIfPossible(); runtime.releaseActiveSourceTray()
+    expect(runtime.activeSourceGrant).toMatchObject({ source, releasedCount: 1, expiresAtSec: 10 })
+    expect(runtime.trays.find((tray) => tray.id === 1)?.zonePlacement).toEqual({ conveyorId: source === 'C' ? 'T' : 'PRE_T', zoneIndex: 0 })
   })
 
   test('new arrivals join ACTIVE and successful departures alone receive ownership', () => {
@@ -127,22 +142,21 @@ describe('Milestone 14B timed source grants', () => {
     expect(runtime.trays.find((tray) => tray.id === 2)?.sourceGrantId).toBeUndefined()
   })
 
-  test.each(['A', 'B'] as const)('%s bypass during DRAINING preserves ownership and PRE_T draining resumes after it completes', (source) => {
+  test.each(['A', 'B'] as const)('%s PRE_T draining completes during bypass and permits handoff', (source) => {
     const { runtime } = isolated(1)
     runtime.trays = [pile(1, source, source === 'A' ? 14 : 7)]; runtime.sourceGrantCursor = source
     runtime.authorizeSourceGrantIfPossible(); runtime.releaseActiveSourceTray(); const grantId = runtime.activeSourceGrant!.grantId
     runtime.timeSec = 1; runtime.synchronizeSourceGrant()
     const released = runtime.trays.find((tray) => tray.sourceGrantId === grantId)!
     released.zonePlacement!.zoneIndex = 5
-    runtime.trays.push(zoned(99, 'T', 0)); runtime.activePurgeBatch = purge(1)
+    runtime.activePurgeBatch = purge(1)
     runtime.synchronizeSourceGrant(); runtime.processZonedBoundaries()
-    expect(runtime.activeSourceGrant).toMatchObject({ grantId, phase: 'DRAINING', releasedCount: 1, enteredTCount: 0 })
-    expect(released.sourceGrantId).toBe(grantId)
-    runtime.activePurgeBatch = null; runtime.trays = runtime.trays.filter((tray) => tray.id !== 99)
-    runtime.processZonedBoundaries()
     expect(runtime.activeSourceGrant).toBeNull()
     expect(runtime.lastCompletedSourceGrant).toMatchObject({ grantId, source, releasedCount: 1, enteredTCount: 1 })
     expect(released.sourceGrantId).toBeUndefined()
+    runtime.trays.push(pile(2, source === 'A' ? 'B' : 'C', source === 'A' ? 7 : 7))
+    runtime.authorizeSourceGrantIfPossible()
+    expect(runtime.activeSourceGrant?.grantId).toBe(grantId + 1)
   })
 
   test('an extended PRE_T blockage drains without controller deadlock once T reopens', () => {

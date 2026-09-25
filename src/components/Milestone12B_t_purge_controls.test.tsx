@@ -12,11 +12,11 @@ describe('Milestone 12B T purge controls', () => {
     const markup = render({ defaultOpenSections: ['srs-control'] })
     expect(markup).toContain('aria-label="T backup trigger"')
     expect(markup).toContain('aria-label="T purge quantity"')
-    expect(markup).toContain('Consecutive occupied T zones measured upstream from D while D is blocked.')
+    expect(markup).toContain('D entrance blocked and T downstream backup threshold reached.')
     expect(markup).toContain('6 means the 6 T zones nearest D must be occupied.')
-    expect(markup).toContain('Maximum frozen batch released from T into PURGE.')
+    expect(markup).toContain('Exact frozen batch quantity; all members must be physically in T before authorization.')
     expect(markup).toContain('Downstream backup depth')
-    expect(markup).toContain('Paused source')
+    expect(markup).not.toContain('Paused source')
   })
 
   test('keeps invalid drafts visible, reports inline validation, disables Start, and reuses pending guidance', () => {
